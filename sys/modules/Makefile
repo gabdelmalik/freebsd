@@ -89,6 +89,7 @@ SUBDIR=	\
 	${_crypto} \
 	${_cryptodev} \
 	${_cs} \
+	cspi \
 	${_ctau} \
 	ctl \
 	${_cxgb} \
