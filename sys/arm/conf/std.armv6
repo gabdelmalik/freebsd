@@ -19,6 +19,7 @@ options 	QUOTA			# Enable disk quotas for UFS
 options 	NFSCL			# Network Filesystem Client
 options 	NFSLOCKD		# Network Lock Manager
 options 	NFS_ROOT		# NFS usable as /, requires NFSCL
+options		NULLFS			# NULL filesystem
 options 	MSDOSFS			# MSDOS Filesystem
 options 	CD9660			# ISO 9660 Filesystem
 options 	PROCFS			# Process filesystem (requires PSEUDOFS)
