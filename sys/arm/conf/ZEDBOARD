@@ -72,6 +72,11 @@ device		scbus			# SCSI bus (required for ATA/SCSI)
 device		da			# Direct Access (disks)
 device		axe			# USB-Ethernet
 
+# SPI support
+device		cspi			# Zynq-7000 SPI controller
+device		spibus
+device		spigen
+
 
 # Flattened Device Tree
 options 	FDT			# Configure using FDT/DTB data
