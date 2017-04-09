@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2017 George Abd-El-Malik <gabdelmalik@fork.id.au>
+ * Copyright (c) 2017 George Abdelmalik <gabdelmalik@fork.id.au>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -84,18 +84,22 @@
 #define   CR_CSL_0	(~(1 << 10))  /* select slave 0 */
 #define   CR_CSL_1	(~(1 << 11))  /* select slave 1 */
 #define   CR_CSL_2	(~(1 << 12))  /* select slave 2 */
-#define  CR_BR_DIV_MASK (7 << 3)  /* mask baud rate divisor bits*/
+   /* SPI line clock baud rate divisor */
+#define  CR_BR_DIV_SHIFT 3
+#define  CR_BR_DIV_MIN 4
+#define  CR_BR_DIV_MAX 256
+#define  CR_BR_DIV_MASK  (7 << CR_BR_DIV_SHIFT)
    /* Exactly one of these shall be specified.
 	* reg &= ~CR_BR_DIV_MASK;
 	* reg |= CR_BR_DIV_4;
     */	
-#define   CR_BR_DIV_4   (1 << 3)  /* divisor of 4 */
-#define   CR_BR_DIV_8   (2 << 3)  /* " " 8 */
-#define   CR_BR_DIV_16  (3 << 3)  /* " " 16 */
-#define   CR_BR_DIV_32  (4 << 3)  /* " " 32 */
-#define   CR_BR_DIV_64  (5 << 3)  /* " " 64 */
-#define   CR_BR_DIV_128 (6 << 3)  /* " " 128 */
-#define   CR_BR_DIV_256 (7 << 3)  /* " " 256 */
+#define   CR_BR_DIV_4   (1 << CR_BR_DIV_SHIFT)  /* divisor of 4 */
+#define   CR_BR_DIV_8   (2 << CR_BR_DIV_SHIFT)  /* " " 8 */
+#define   CR_BR_DIV_16  (3 << CR_BR_DIV_SHIFT)  /* " " 16 */
+#define   CR_BR_DIV_32  (4 << CR_BR_DIV_SHIFT)  /* " " 32 */
+#define   CR_BR_DIV_64  (5 << CR_BR_DIV_SHIFT)  /* " " 64 */
+#define   CR_BR_DIV_128 (6 << CR_BR_DIV_SHIFT)  /* " " 128 */
+#define   CR_BR_DIV_256 (7 << CR_BR_DIV_SHIFT)  /* " " 256 */
 #define  CR_CLK_PH_INACT (1 << 2) /* Clock phase inactive outside SPI word, */
                                   /* otherwise it will be active, */
 #define  CR_CLK_POL_HIGH (1 << 1) /* Clock polarity is high outside SPI word */
@@ -206,25 +210,10 @@ set_interrupts(struct spi_softc *sc)
 {
 }
 
-#define SPI0_REF_RST_SHIFT 2
-#define SPI0_CPU1X_RST_SHIFT 0
+#define CSPI_LINE_CLK 25000000   /* 25 Mhz */ /*TODO - supply via DTS */
+#if 0
 static void
-spi_reset(struct spi_softc *sc)
-{
-	/* ABP and PS interface reset */
-	WR4(sc, ZY7_SLCR_SPI_RST_CTRL,
-	   (1 << SPI0_REF_RST_SHIFT) | (1 << SPI0_CPU1X_RST_SHIFT));
-	DELAY(1000);
-	WR4(sc, ZY7_SLCR_SPI_RST_CTRL, 0);
-}
-
-#define SPI_CLK_DIVISOR_SHIFT  8
-#define SPI_CLK_DIVISOR_10     0x0a 
-#define SPI_CLK_SRCSEL_SHIFT   4
-#define SPI_CLK_SRCSEL_IOPLL   0x1
-#define SPI_CLK_ACT0           1
-static void
-program_clocks(struct spi_softc *sc)
+program_clocks(struct spi_softc *sc, int ref_freq)
 {
 	/* SPI_Ref_Clk to 100 MHz, Assumes I/O PLL is at 1,000 MHz.
 	 * SPI_Ref_Clk must be >= CPU_1x clock frequency.
@@ -236,27 +225,63 @@ program_clocks(struct spi_softc *sc)
 	      | (SPI_CLK_SRCSEL_IOPLL << SPI_CLK_SRCSEL_SHIFT)
 	      | (SPI_CLK_ACT0));
 }
-
+#endif
 static void
-config_spi(struct spi_softc *sc)
+config_spi(device_t dev, struct spi_softc *sc)
 {
+	/* TODO - assuming SPI 0, we really should use the
+	 * unit that the instance was attached as.*/
+	int unit = 0;
+	enum zy7_clk_src dummy;
+	int ref_freq;
+	int error = cspi_get_ref_clk(unit, &dummy, &ref_freq);
+	if (error) {
+		device_printf(dev, "failed to get reference clock\n");
+		return;
+	}
+	/* Find the dividor that when applied to the SPI reference
+	 * clock, will give an SPI line rate <= the desired SPI signal
+         * clock frequency.*/
+	int divisor = CR_BR_DIV_MIN; 
+	while (divisor <= CR_BR_DIV_MAX ){
+		if (ref_freq/divisor > CSPI_LINE_CLK)
+			divisor *= 2;   /* divisor not large enough yet */
+		else
+			break;
+	}
+	if( divisor > CR_BR_DIV_MAX ){
+		device_printf(dev, "divisor not found\n");
+		return;
+	}
 	int reg = 0;
 	reg |= CR_MFG;
 	reg |= CR_CSL_NONE;
-	reg |= CR_BR_DIV_4; /* to give a SCLK of 25 MHz, assuming SPI_Ref_Clk was */
-	                    /* 100MHz */
+	reg |= ((divisor >> 1) << CR_BR_DIV_SHIFT);
 	reg |= CR_CLK_PH_INACT;
 	reg |= CR_CLK_POL_HIGH;
 	reg |= CR_MODE_MASTER;
 	WR4(sc, SPI_CR, reg);
 }
 
+#define CSPI_REF_CLK 100000000   /* 100 Mhz */ /*TODO - supply via DTS */
 static void
-hw_init(struct spi_softc *sc)
+hw_init(device_t dev, struct spi_softc *sc)
 {
-	spi_reset(sc);
-	program_clocks(sc);
-	config_spi(sc);
+	/* TODO - assuming SPI 0, we really should use the
+	 * unit that the instance was attached as.*/
+	int unit = 0;
+	int error = cspi_clk_reset(unit);
+	if (error) {
+		device_printf(dev, "clock reset failed\n");
+		return;
+	}
+	error = cspi_set_ref_clk(unit,
+	    ZY7_SLCR_SPI_CLK_SRCSEL_IOPLL, CSPI_REF_CLK);
+	if (error) {
+		device_printf(dev, "failed to set reference clock\n");
+		return;
+	}
+	config_spi(dev, sc);
 }
 
 static int
@@ -273,7 +298,7 @@ spi_attach(device_t dev)
 	sc->bst = rman_get_bustag(sc->res);
 	sc->bsh = rman_get_bushandle(sc->res);
 
-    hw_init(sc);
+    hw_init(dev, sc);
 
 	device_add_child(dev, "spibus", -1);
 	return bus_generic_attach(dev);

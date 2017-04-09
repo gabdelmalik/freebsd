@@ -542,6 +542,88 @@ zy7_pl_level_shifters_disable(void)
 	ZSLCR_UNLOCK(sc);
 }
 
+
+/* Reset the interfaces of the SPI controller */
+int
+cspi_clk_reset(int unit)
+{
+	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
+	uint32_t reg = unit
+	    ? ZY7_SLCR_SPI1_REF_RST | ZY7_SLCR_SPI1_CPU1X_RST
+	    : ZY7_SLCR_SPI0_REF_RST | ZY7_SLCR_SPI0_CPU1X_RST;
+
+	if (!sc || unit < 0 || unit > 1)
+		return (-1);
+
+	ZSLCR_LOCK(sc);
+
+	/* Unlock SLCR registers. */
+	zy7_slcr_unlock(sc);
+
+	/* It is required that the reset flags be asserted, then after some
+	 * delay be deasserted.
+	 */
+	WR4(sc, ZY7_SLCR_SPI_RST_CTRL, reg);
+	DELAY(1000);
+	WR4(sc, ZY7_SLCR_SPI_RST_CTRL, 0);
+
+	/* Lock SLCR registers. */
+	zy7_slcr_lock(sc);
+
+	ZSLCR_UNLOCK(sc);
+
+	return (0);
+}
+
+int
+cspi_set_ref_clk(int unit, enum zy7_clk_src source, int freq)
+{
+	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
+
+	if (!sc || unit < 0 || unit > 1)
+		return (-1);
+
+	ZSLCR_LOCK(sc);
+
+	/* Unlock SLCR registers. */
+	zy7_slcr_unlock(sc);
+
+	/* Clocking restrictions require that the SPI reference clock,
+	 * SPI_Ref_Clk, be greater than the  CPU_1x clock frequency.
+	 * The divisor shall be chosen so that that condition holds. */
+	/* TODO - work goes here */
+
+	/* Lock SLCR registers. */
+	zy7_slcr_lock(sc);
+
+	ZSLCR_UNLOCK(sc);
+
+	return (0);
+}
+
+int
+cspi_get_ref_clk(int unit, enum zy7_clk_src *source, int *freq)
+{
+	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
+
+	if (!sc || unit < 0 || unit > 1 || !source || !freq)
+		return (-1);
+
+	ZSLCR_LOCK(sc);
+
+	/* Unlock SLCR registers. */
+	zy7_slcr_unlock(sc);
+
+	/* TODO - work goes here */
+
+	/* Lock SLCR registers. */
+	zy7_slcr_lock(sc);
+
+	ZSLCR_UNLOCK(sc);
+
+	return (0);
+}
+
 static int
 zy7_slcr_probe(device_t dev)
 {
