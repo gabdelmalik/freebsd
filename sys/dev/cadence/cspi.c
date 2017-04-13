@@ -29,6 +29,8 @@
  *
  * Refer to chapter 17 of the Xilinx Zynq-7000 All programmable SoC
  * techincal reference manual, ug586-Zynq-7000-TRM.pdf.
+ *
+ * Note: Only SPI Master mode is supported by this driver implementation.
  */
 
 //#include <sys/cdefs.h>
@@ -40,8 +42,8 @@
 #include <sys/module.h>
 #include <sys/conf.h>
 
-//#include <sys/malloc.h>
-//#include <sys/rman.h>
+#include <sys/malloc.h>
+#include <sys/rman.h>
 //#include <sys/timeet.h>
 //#include <sys/timetc.h>
 //#include <sys/watchdog.h>
@@ -59,13 +61,21 @@
 #include <arm/xilinx/zy7_slcr.h>
 
 #include <machine/bus.h>
-#include <machine/cpu.h>
-#include <machine/intr.h>
+//#include <machine/cpu.h>
+//#include <machine/intr.h>
 
-#define	RD4(_sc, _reg)	\
-	bus_space_read_4(_sc->bst, _sc->bsh, _reg)
-#define	WR4(_sc, _reg, _val)	\
-	bus_space_write_4(_sc->bst, _sc->bsh, _reg, _val)
+#define	RD4(_sc, _reg) \
+	bus_read_4((_sc)->mem_res, (_reg))
+#define	WR4(_sc, _reg, _val) \
+	bus_write_4((_sc)->mem_res, (_reg), (_val))
+#define BW(_sc) \
+	bus_barrier((_sc)->mem_res, 0, 0, BUS_SPACE_BARRIER_WRITE)
+#define BR(_sc) \
+	bus_barrier((_sc)->mem_res, 0, 0, BUS_SPACE_BARRIER_READ)
+#define BRW(_sc) \
+	bus_barrier((_sc)->mem_res, 0, 0, \
+	    BUS_SPACE_BARRIER_READ | BUS_SPACE_BARRIER_WRITE)
+
 
 #define FIFO_DEPTH 128 /* byte depth of Rx and Tx FIFO queues */
 
@@ -169,90 +179,71 @@
 #define  MODID_MASK  (0xffffff)
 
 struct spi_softc {
-	struct resource		*res;
-	bus_space_tag_t		bst;
-	bus_space_handle_t	bsh;
+	struct resource		*mem_res;
 	void			*ih;
-};
-
-static struct resource_spec spi_spec[] = {
-	{ SYS_RES_MEMORY,	0,	RF_ACTIVE },
-	{ -1, 0 }
+	int			spi_clk_freq;
 };
 
 static struct ofw_compat_data spi_matches[] = {
-	{ "xlnx,zy7_spi"       , 1 },
-	{ "xlnx,zynq-spi-r1p6" , 1 },
-	{ "cdns,spi-r1p6"      , 1 },
+	/* found in vendor Linux upstreamed DTS files */
+	{ "xlnx,zynq-spi-r1p6" , 1 }, 
+	{ "cdns,spi-r1p6"      , 1 },   
+	/* found in FreeBSD zedboard DTS file */
+	{ "cadence,spi"        , 1 },
 	{ NULL                 , 0 }
 };
 
+/* SPI clocks have been initialised */
+static bool clocks_done = false;
+
+//static void
+//set_interrupts(struct spi_softc *sc)
+//{
+//}
+
+#define CSPI_LINE_CLK_MIO_DEFAULT  50000000
+#define CSPI_LINE_CLK_EMIO_DEFAULT 25000000
+#define CSPI_LINE_CLK_MIO_MAX  50000000
+#define CSPI_LINE_CLK_EMIO_MAX 25000000
+#define CSPI_LINE_CLK_DEFAULT  CSPI_LINE_CLK_MIO_DEFAULT
+
 static int
-spi_probe(device_t dev)
+config_spi(device_t dev)
 {
-	if (!ofw_bus_status_okay(dev))
-		return ENXIO;
-
-    if (ofw_bus_search_compatible(dev, spi_matches)->ocd_data == 0)
-		return ENXIO;
-
-	device_set_desc(dev, "Cadence SPI controller");
-	return BUS_PROBE_DEFAULT;
-}
-
-static void
-set_clocks(struct spi_softc *sc)
-{
-}
-
-static void
-set_interrupts(struct spi_softc *sc)
-{
-}
-
-#define CSPI_LINE_CLK 25000000   /* 25 Mhz */ /*TODO - supply via DTS */
-#if 0
-static void
-program_clocks(struct spi_softc *sc, int ref_freq)
-{
-	/* SPI_Ref_Clk to 100 MHz, Assumes I/O PLL is at 1,000 MHz.
-	 * SPI_Ref_Clk must be >= CPU_1x clock frequency.
-	 * TODO who to read the values of I/O PLL and CPU_1x frequencies
-	 * to assert that this condition holds.
-	 */
-	WR4(sc, ZY7_SLCR_SPI_CLK_CTRL,
-	   (SPI_CLK_DIVISOR_10 << SPI_CLK_DIVISOR_SHIFT) 
-	      | (SPI_CLK_SRCSEL_IOPLL << SPI_CLK_SRCSEL_SHIFT)
-	      | (SPI_CLK_ACT0));
-}
-#endif
-static void
-config_spi(device_t dev, struct spi_softc *sc)
-{
-	/* TODO - assuming SPI 0, we really should use the
-	 * unit that the instance was attached as.*/
-	int unit = 0;
-	enum zy7_clk_src dummy;
 	int ref_freq;
-	int error = cspi_get_ref_clk(unit, &dummy, &ref_freq);
-	if (error) {
-		device_printf(dev, "failed to get reference clock\n");
-		return;
-	}
+	int error = cspi_get_ref_clk_freq(&ref_freq);
+	if (error)
+		return error;
+
+	struct spi_softc *sc = device_get_softc(dev);
+	pcell_t cell;
+	phandle_t node = ofw_bus_get_node(dev);
+
+	/* SPI clock freq can come from DTB */
+	sc->spi_clk_freq = CSPI_LINE_CLK_DEFAULT;
+	if (OF_getprop(node, "spi-clock", &cell, sizeof(cell)) > 0)
+		sc->spi_clk_freq = fdt32_to_cpu(cell);
+
+/*  TODO - verfiy that the spi frequency is valid for the case
+ * of MIO or EMIO. */
+/* Whether the SPI is routed to MIO or EMIO pins will determine what the max
+ * line rate can be.
+ * For MIO its 50 MHz, while for EMIO it's 25 MHz
+ */
 	/* Find the dividor that when applied to the SPI reference
 	 * clock, will give an SPI line rate <= the desired SPI signal
          * clock frequency.*/
 	int divisor = CR_BR_DIV_MIN; 
-	while (divisor <= CR_BR_DIV_MAX ){
-		if (ref_freq/divisor > CSPI_LINE_CLK)
+	while (divisor <= CR_BR_DIV_MAX){
+		if (ref_freq/divisor > sc->spi_clk_freq)
 			divisor *= 2;   /* divisor not large enough yet */
 		else
 			break;
 	}
-	if( divisor > CR_BR_DIV_MAX ){
-		device_printf(dev, "divisor not found\n");
-		return;
-	}
+
+	if( divisor > CR_BR_DIV_MAX )
+		return error;
+
 	int reg = 0;
 	reg |= CR_MFG;
 	reg |= CR_CSL_NONE;
@@ -261,44 +252,104 @@ config_spi(device_t dev, struct spi_softc *sc)
 	reg |= CR_CLK_POL_HIGH;
 	reg |= CR_MODE_MASTER;
 	WR4(sc, SPI_CR, reg);
+	BW(sc); /* ensure config is written before any later data transfer
+	         * attempts that may occur. */
+
+	if (bootverbose)
+		device_printf(dev, "master clock frequency %dHz\n",
+		    ref_freq / divisor);
+
+	return 0;
 }
 
-#define CSPI_REF_CLK 100000000   /* 100 Mhz */ /*TODO - supply via DTS */
-static void
-hw_init(device_t dev, struct spi_softc *sc)
+ /*TODO - allow override via DTS */
+#define CSPI_REF_CLK_DEFAULT 100000000   /* 100 Mhz */
+
+static int
+reset_unit(int unit)
 {
-	/* TODO - assuming SPI 0, we really should use the
-	 * unit that the instance was attached as.*/
-	int unit = 0;
 	int error = cspi_clk_reset(unit);
-	if (error) {
-		device_printf(dev, "clock reset failed\n");
-		return;
-	}
-	error = cspi_set_ref_clk(unit,
-	    ZY7_SLCR_SPI_CLK_SRCSEL_IOPLL, CSPI_REF_CLK);
-	if (error) {
-		device_printf(dev, "failed to set reference clock\n");
-		return;
-	}
-	config_spi(dev, sc);
+	if (error)
+		return error;
+
+	return 0;
+}
+
+static int
+init_clocks()
+{
+	int error = cspi_set_ref_clk_source(zy7_clk_src_iopll);
+	if (error)
+		return error;
+
+	error = cspi_set_ref_clk_freq(CSPI_REF_CLK_DEFAULT);
+	if (error)
+		return error;
+
+	return 0;
+}
+
+static int
+spi_probe(device_t dev)
+{
+	if (!ofw_bus_status_okay(dev))
+		return ENXIO;
+
+	if (ofw_bus_search_compatible(dev, spi_matches)->ocd_data == 0)
+		return ENXIO;
+
+	device_set_desc(dev, "Cadence SPI controller");
+	return BUS_PROBE_DEFAULT;
 }
 
 static int
 spi_attach(device_t dev)
 {
-	struct spi_softc *sc = device_get_softc(dev);
+	int error;
 
-	if (bus_alloc_resources(dev, spi_spec, &sc->res)) {
-		device_printf(dev, "could not allocate resources\n");
-		return (ENXIO);
+	/* Only do once on the first instance attachment. */
+	if (!clocks_done) {
+		error = init_clocks();
+		if (error) {
+			device_printf(dev, "clock init failed\n");
+			return ENXIO;
+		}
+		clocks_done = true;
+		if (bootverbose) {
+			int ref_freq = 0;
+			enum zy7_clk_src ref_source;
+			(void)cspi_get_ref_clk_freq(&ref_freq);
+			(void)cspi_get_ref_clk_source(&ref_source);
+			device_printf(dev, "reference clock source %s\n",
+			    zy7_clk_src_as_string(ref_source));
+			device_printf(dev, "reference clock frequency %dHz\n",
+			    ref_freq);
+		}
+	}
+        /* Reset is per controller instance */
+	error = reset_unit(device_get_unit(dev));
+	if (error) {
+		device_printf(dev, "reset failed\n");
+		return ENXIO;
 	}
 
-	/* Memory interface */
-	sc->bst = rman_get_bustag(sc->res);
-	sc->bsh = rman_get_bushandle(sc->res);
+	struct spi_softc *sc = device_get_softc(dev);
+	/* acquire a bus presence */
+	int rid = 0;
+	sc->mem_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid,
+	    RF_ACTIVE);
+	if (!sc->mem_res) {
+		device_printf(dev, "could not allocate resources\n");
+		return ENXIO;
+	}
 
-    hw_init(dev, sc);
+	error = config_spi(dev);
+	if (error) {
+		bus_release_resource(dev,SYS_RES_MEMORY,
+		    rman_get_rid(sc->mem_res), sc->mem_res);
+		device_printf(dev, "config failed\n");
+		return ENXIO;
+	}
 
 	device_add_child(dev, "spibus", -1);
 	return bus_generic_attach(dev);

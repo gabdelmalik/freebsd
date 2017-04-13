@@ -142,15 +142,13 @@
 #define ZY7_SLCR_SDIO_CLK_CTRL		0x0150
 #define ZY7_SLCR_UART_CLK_CTRL		0x0154
 #define ZY7_SLCR_SPI_CLK_CTRL		0x0158
-#define   ZY7_SLCR_SPI_CLK_CTRL_RESET		0x3f03
 #define   ZY7_SLCR_SPI_CLK_DIVISOR_SHIFT	8
 #define   ZY7_SLCR_SPI_CLK_DIVISOR_MASK		(0x3f << \
 						ZY7_SLCR_SPI_CLK_DIVISOR_SHIFT)
+#define   ZY7_SLCR_SPI_CLK_DIVISOR_MIN		4
 #define   ZY7_SLCR_SPI_CLK_DIVISOR_MAX		0x3f
 #define   ZY7_SLCR_SPI_CLK_SRCSEL_SHIFT		4
 #define   ZY7_SLCR_SPI_CLK_SRCSEL_MASK		(0x3 << \
-						ZY7_SLCR_SPI_CLK_SRCSEL_SHIFT)
-#define   ZY7_SLCR_SPI_CLK_SRCSEL_RESET		(0 << \
 						ZY7_SLCR_SPI_CLK_SRCSEL_SHIFT)
 #define   ZY7_SLCR_SPI_CLK_SRCSEL_IOPLL		(0 << \
 						ZY7_SLCR_SPI_CLK_SRCSEL_SHIFT)
@@ -340,10 +338,13 @@ void zy7_pl_level_shifters_disable(void);
 
 int cspi_clk_reset(int unit);
 enum zy7_clk_src {
-    clk_src_iopll, clk_src_armpll, clk_src_ddrpll
+    zy7_clk_src_iopll, zy7_clk_src_armpll, zy7_clk_src_ddrpll
 };
-int cspi_set_ref_clk(int unit, enum zy7_clk_src source, int freq);
-int cspi_get_ref_clk(int unit, enum zy7_clk_src *source, int *freq);
+const char* zy7_clk_src_as_string(enum zy7_clk_src source);
+int cspi_set_ref_clk_source(enum zy7_clk_src source);
+int cspi_set_ref_clk_freq(int freq);
+int cspi_get_ref_clk_source(enum zy7_clk_src *source);
+int cspi_get_ref_clk_freq(int *freq);
 
 #endif
 #endif /* _ZY7_SLCR_H_ */
