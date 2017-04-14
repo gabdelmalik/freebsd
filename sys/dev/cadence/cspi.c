@@ -178,10 +178,24 @@
 #define SPI_MODID	0x2C /* Module ID register */
 #define  MODID_MASK  (0xffffff)
 
+enum master_xfer_mode {
+	/* Manual assertion/de-assertion of slave select line,
+	 * and manual start of data transfer.
+	 * This mode is the default. */
+	xfer_manual,
+  	/* Slave select line is automatically asserted/de-asserted
+	 * during transfer, and tranfer is automatically started and
+	 * remains in progress while there is data in the txfifo.
+	 * This mode requires the use of tx/rx fifo threshold
+	 * interrupts. */
+	xfer_automatic
+};
+
 struct spi_softc {
 	struct resource		*mem_res;
 	void			*ih;
 	int			spi_clk_freq;
+	enum master_xfer_mode	xfer_mode;
 };
 
 static struct ofw_compat_data spi_matches[] = {
@@ -219,10 +233,26 @@ config_spi(device_t dev)
 	pcell_t cell;
 	phandle_t node = ofw_bus_get_node(dev);
 
-	/* SPI clock freq can come from DTB */
-	sc->spi_clk_freq = CSPI_LINE_CLK_DEFAULT;
+	/* SPI clock freq may be overridden via DTB */
 	if (OF_getprop(node, "spi-clock", &cell, sizeof(cell)) > 0)
 		sc->spi_clk_freq = fdt32_to_cpu(cell);
+
+	/* SPI transfer mode may be overridden via DTB */
+	char xfer_mode[32] = {0};
+	if (OF_getprop(node, "spi-xfer-mode", &xfer_mode,
+	    sizeof(xfer_mode)) > 0
+	    && strncmp(xfer_mode, "automatic", 9) == 0)
+		sc->xfer_mode = xfer_automatic;
+
+	/* FIXME : automatic transfer isn't yet suppported.
+	 * Revert to manual, and tell the operator about it. 
+	 */
+	if (sc->xfer_mode == xfer_automatic) {
+		device_printf(dev,
+		    "automatic transfer mode is not supported at this time, "
+		    "falling back to manual mode.\n");
+		sc->xfer_mode = xfer_manual;
+	}
 
 /*  TODO - verfiy that the spi frequency is valid for the case
  * of MIO or EMIO. */
@@ -334,6 +364,11 @@ spi_attach(device_t dev)
 	}
 
 	struct spi_softc *sc = device_get_softc(dev);
+
+	/* Initialise operating parameters. */
+	sc->xfer_mode = xfer_manual;
+	sc->spi_clk_freq = CSPI_LINE_CLK_DEFAULT;
+
 	/* acquire a bus presence */
 	int rid = 0;
 	sc->mem_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid,
