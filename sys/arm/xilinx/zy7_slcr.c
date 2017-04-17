@@ -800,6 +800,83 @@ cspi_get_ref_clk_freq(int *freq)
 	return (0);
 }
 
+uint32_t
+zy7_mio_get_pin_register(int pin)
+{
+	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
+
+	if (pin < ZY7_SLCR_MIO_PIN_MIN || pin > ZY7_SLCR_MIO_PIN_MAX)
+		return false;
+
+	ZSLCR_LOCK(sc);
+
+	uint32_t result = RD4(sc, ZY7_SLCR_MIO_PIN(pin));
+
+	ZSLCR_UNLOCK(sc);
+	return result;
+}
+
+bool
+zy7_mio_set_pin_register(int pin, uint32_t reg)
+{
+	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
+
+	if (pin < ZY7_SLCR_MIO_PIN_MIN || pin > ZY7_SLCR_MIO_PIN_MAX)
+		return false;
+
+	ZSLCR_LOCK(sc);
+	zy7_slcr_unlock(sc);
+
+	WR4(sc, ZY7_SLCR_MIO_PIN(pin), reg);
+
+	zy7_slcr_lock(sc);
+	ZSLCR_UNLOCK(sc);
+	return true;
+}
+
+bool
+zy7_mio_unmap_pin_range(int begin, int end)
+{
+	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
+
+	if (begin < ZY7_SLCR_MIO_PIN_MIN
+	    || end > ZY7_SLCR_MIO_PIN_MAX
+	    || begin > end)
+		return false;
+
+	ZSLCR_LOCK(sc);
+	zy7_slcr_unlock(sc);
+
+	for (int i = begin; i <= end; ++i)
+		WR4(sc, ZY7_SLCR_MIO_PIN(i), 0);
+
+	zy7_slcr_lock(sc);
+	ZSLCR_UNLOCK(sc);
+	return true;
+}
+
+void
+zy7_dump_mio_pin_control_registers()
+{
+	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
+
+	device_printf(sc->dev,
+	    "MIO pin control register values\n");
+	device_printf(sc->dev,
+	    "-------------------------------\n");
+
+	ZSLCR_LOCK(sc);
+
+	for (int i = ZY7_SLCR_MIO_PIN_MIN;
+	    i <= ZY7_SLCR_MIO_PIN_MAX; ++i)
+		device_printf(sc->dev,
+		    "[%02d] 0x%08x\n",
+		    i, RD4(sc, ZY7_SLCR_MIO_PIN(i)));
+
+	ZSLCR_UNLOCK(sc);
+}
+
+
 static int
 zy7_slcr_probe(device_t dev)
 {
@@ -925,6 +1002,9 @@ zy7_slcr_attach(device_t dev)
 
 	/* Lock SLCR registers. */
 	zy7_slcr_lock(sc);
+
+	if (bootverbose)
+		zy7_dump_mio_pin_control_registers();
 
 	return (0);
 }

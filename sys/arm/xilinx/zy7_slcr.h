@@ -252,6 +252,8 @@
 #define ZY7_SLCR_DDR_DFI_STATUS		0x0620
 
 /* MIO Pin controls */
+#define ZY7_SLCR_MIO_PIN_MIN		0
+#define ZY7_SLCR_MIO_PIN_MAX		53
 #define ZY7_SLCR_MIO_PIN(n)		(0x0700+(n)*4)		/* 0-53 */
 #define   ZY7_SLCR_MIO_PIN_RCVR_DIS			(1<<13)
 #define   ZY7_SLCR_MIO_PIN_PULLUP_EN			(1<<12)
@@ -335,6 +337,12 @@ int zy7_pl_level_shifters_enabled(void);
 void zy7_pl_level_shifters_enable(void);
 void zy7_pl_level_shifters_disable(void);
 void zy7_pl_level_shifters_disable(void);
+
+/* MIO pin contrpl register manipulation, pins 0 to 53 */
+uint32_t zy7_mio_get_pin_register(int pin);
+bool     zy7_mio_set_pin_register(int pin, uint32_t reg);
+bool     zy7_mio_unmap_pin_range(int begin, int end); /* inclusive */
+void     zy7_dump_mio_pin_control_registers(void);
 
 int cspi_clk_reset(int unit);
 enum zy7_clk_src {

@@ -697,14 +697,49 @@ init_clocks()
 
 static int cspi_detach(device_t dev);
 
+static bool
+cspi_map_spi0_pins()
+{
+	return 
+	    zy7_mio_set_pin_register(28, 0x22a0) /* serial clock */
+	    && zy7_mio_set_pin_register(29, 0x02A0) /* Master In Slave Out */
+	    && zy7_mio_set_pin_register(30, 0x32A0) /* slave select 0 */
+	    && zy7_mio_set_pin_register(31, 0x32A0) /* slave select 1 */
+	    && zy7_mio_set_pin_register(32, 0x32A0) /* slave select 2 */
+	    && zy7_mio_set_pin_register(33, 0x22A0) /* Master Out Slave In */
+	;
+}
+
+static bool
+cspi_map_spi1_pins()
+{
+	return 
+	    zy7_mio_set_pin_register(34, 0x22a0) /* serial clock */
+	    && zy7_mio_set_pin_register(35, 0x02A0) /* Master In Slave Out */
+	    && zy7_mio_set_pin_register(36, 0x32A0) /* slave select 0 */
+	    && zy7_mio_set_pin_register(37, 0x32A0) /* slave select 1 */
+	    && zy7_mio_set_pin_register(38, 0x32A0) /* slave select 2 */
+	    && zy7_mio_set_pin_register(39, 0x22A0) /* Master Out Slave In */
+	;
+}
+
 static int
 cspi_attach(device_t dev)
 {
 	int error;
 
 	/* Only do once on the first instance attachment, as setting
-	 * apply to all instances. */
+	 * apply to all instances.
+	 */
 	if (!clocks_done) {
+		/* SPI 0 and 1 occupy the MIO pin region 28-39. */
+		if (!zy7_mio_unmap_pin_range(28,39)
+		    || !cspi_map_spi0_pins()
+		    || !cspi_map_spi1_pins()) {
+			device_printf(dev, "MIO routing failed\n");
+			return ENXIO;
+		}
+
 		error = init_clocks();
 		if (error) {
 			device_printf(dev, "clock init failed\n");
@@ -720,6 +755,7 @@ cspi_attach(device_t dev)
 			    zy7_clk_src_as_string(ref_source));
 			device_printf(dev, "reference clock frequency %dHz\n",
 			    ref_freq);
+			zy7_dump_mio_pin_control_registers();
 		}
 	}
 
