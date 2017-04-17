@@ -173,11 +173,11 @@
 
 static struct ofw_compat_data spi_matches[] = {
 	/* found in vendor Linux upstreamed DTS files */
-	{ "xlnx,zynq-spi-r1p6" , 1 }, 
-	{ "cdns,spi-r1p6"      , 1 },   
+	{ "xlnx,zynq-spi-r1p6" , true }, 
+	{ "cdns,spi-r1p6"      , true },   
 	/* found in FreeBSD zedboard DTS file */
-	{ "cadence,spi"        , 1 },
-	{ NULL                 , 0 }
+	{ "cadence,spi"        , true },
+	{ NULL                 , false }
 };
 
 /* SPI clocks have been initialised */
@@ -608,7 +608,7 @@ cspi_probe(device_t dev)
 	if (!ofw_bus_status_okay(dev))
 		return ENXIO;
 
-	if (ofw_bus_search_compatible(dev, spi_matches)->ocd_data == 0)
+	if (!ofw_bus_search_compatible(dev, spi_matches)->ocd_data)
 		return ENXIO;
 
 	device_set_desc(dev, "Cadence SPI controller");
