@@ -49,6 +49,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/resource.h>
 #include <sys/rman.h>
 #include <sys/uio.h>
+#include <sys/endian.h>
 
 #include <machine/bus.h>
 #include <machine/resource.h>
@@ -58,6 +59,12 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus_subr.h>
 
 #include <arm/xilinx/zy7_slcr.h>
+
+enum pl_byte_order {
+	plbo_unknown = 0, /* examin SYNC WORD */
+	plbo_le,	/* little endian */
+	plbo_be		/* big endian */
+};
 
 struct zy7_devcfg_softc {
 	device_t	dev;
@@ -71,6 +78,7 @@ struct zy7_devcfg_softc {
 	bus_dmamap_t	dma_map;
 
 	int		is_open;
+	enum pl_byte_order	pl_ordering;
 
 	struct sysctl_ctx_list sysctl_tree;
 	struct sysctl_oid *sysctl_tree_top;
@@ -401,10 +409,10 @@ zy7_devcfg_init_hw(struct zy7_devcfg_softc *sc)
 
 	/* Set devcfg control register. */
 	WR4(sc, ZY7_DEVCFG_CTRL,
-	    ZY7_DEVCFG_CTRL_PCFG_PROG_B |
+//GA	    ZY7_DEVCFG_CTRL_PCFG_PROG_B |
 	    ZY7_DEVCFG_CTRL_PCAP_PR |
 	    ZY7_DEVCFG_CTRL_PCAP_MODE |
-	    ZY7_DEVCFG_CTRL_USER_MODE |
+//GA	    ZY7_DEVCFG_CTRL_USER_MODE |
 	    ZY7_DEVCFG_CTRL_RESVD_WR11 |
 	    ZY7_DEVCFG_CTRL_SPNIDEN |
 	    ZY7_DEVCFG_CTRL_SPIDEN |
@@ -440,17 +448,17 @@ zy7_devcfg_reset_pl(struct zy7_devcfg_softc *sc)
 	 * Wait for INIT to assert.  If it is already asserted, we may not get
 	 * an edge interrupt so cancel it and continue.
 	 */
-	if ((RD4(sc, ZY7_DEVCFG_STATUS) &
-	     ZY7_DEVCFG_STATUS_PCFG_INIT) != 0) {
-		/* Already asserted.  Cancel interrupt. */
-		WR4(sc, ZY7_DEVCFG_INT_MASK, ~0);
-	}
-	else {
-		/* Wait for positive edge interrupt. */
+//GA	if ((RD4(sc, ZY7_DEVCFG_STATUS) &
+//GA	     ZY7_DEVCFG_STATUS_PCFG_INIT) != 0) {
+//GA		/* Already asserted.  Cancel interrupt. */
+//GA		WR4(sc, ZY7_DEVCFG_INT_MASK, ~0);
+//GA	}
+//GA	else {
+//GA		/* Wait for positive edge interrupt. */
 		err = mtx_sleep(sc, &sc->sc_mtx, PCATCH, "zy7i1", hz);
 		if (err != 0)
 			return (err);
-	}
+//GA	}
 	
 	/* Reassert PROG_B (active low). */
 	devcfg_ctl &= ~ZY7_DEVCFG_CTRL_PCFG_PROG_B;
@@ -525,8 +533,44 @@ zy7_devcfg_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 	}
 
 	sc->is_open = 1;
+	sc->pl_ordering = plbo_unknown;
 	DEVCFG_SC_UNLOCK(sc);
 	return (0);
+}
+
+static enum pl_byte_order
+zy7_devcfg_detect_byte_ordering(void *dma_mem, int sz)
+{
+	const unsigned char le_sync_word[] = "\x66\x55\x99\xAA";
+	const unsigned char be_sync_word[] = "\xAA\x99\x55\x66";
+	unsigned char *mem = (unsigned char*) dma_mem;
+	enum pl_byte_order result = plbo_unknown;
+	/* look for the SYNC word. The byte ordering of PL data
+	 * follows that of the SYNC word.
+	 */
+	int i = 0;
+	for (; i < sz - 4; i++) {
+		if (memcmp(mem + i, le_sync_word, 4) == 0) {
+			result = plbo_le;
+			break;
+		}
+		if (memcmp(mem + i, be_sync_word, 4) == 0) {
+			result = plbo_be;
+			break;
+		}
+	}
+	return result;
+}
+
+static void
+zy7_devcfg_convert_to_le(void *dma_mem, int sz)
+{
+	/* Convert PL data to little-endian byte ordering. */
+	unsigned char *mem = (unsigned char*) dma_mem;
+	for (int i = 0; i < sz; i += 4) {
+		uint32_t *p = (uint32_t *)&mem[i];
+		*p = bswap32(*p);
+	}
 }
 
 static int
@@ -580,6 +624,25 @@ zy7_devcfg_write(struct cdev *dev, struct uio *uio, int ioflag)
 		DEVCFG_SC_LOCK(sc);
 		if (err != 0)
 			break;
+		/* Detect the byte ordering of the PL data if unknown.
+		 * This will only be attempted on the first write, EIO
+		 * results if determination fails.
+		 */
+		if (sc->pl_ordering == plbo_unknown) {
+			enum pl_byte_order plbo =
+			    zy7_devcfg_detect_byte_ordering(
+			        dma_mem, segsz);
+			if (plbo == plbo_unknown) {
+				device_printf(sc->dev,
+				    "could determine PL data byte order.\n");
+				err = EIO;
+				break;
+			}
+			sc->pl_ordering = plbo;
+		}
+		/* Convert PL data to little-endian byte ordering if needed. */
+		if (sc->pl_ordering == plbo_be)
+			zy7_devcfg_convert_to_le(dma_mem, segsz);
 
 		/* Flush the cache to memory. */
 		bus_dmamap_sync(sc->dma_tag, sc->dma_map,
