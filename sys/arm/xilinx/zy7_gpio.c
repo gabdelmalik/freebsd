@@ -336,10 +336,8 @@ zy7_gpio_attach(device_t dev)
 		return (ENOMEM);
 	}
 
-	/* Completely reset, if not prevented via DTB property. */
-	pcell_t cell;
-	phandle_t node = ofw_bus_get_node(dev);
-	if (OF_getprop(node, "dont-reset", &cell, sizeof(cell)) == -1)
+	/* Completely reset, if not prevented via device-tree property. */
+	if (!OF_hasprop(ofw_bus_get_node(dev), "dont-reset"))
 		zy7_gpio_hw_reset(sc);
 
 	sc->busdev = gpiobus_attach_bus(dev);
