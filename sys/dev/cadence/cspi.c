@@ -44,9 +44,6 @@
 
 #include <sys/malloc.h>
 #include <sys/rman.h>
-//#include <sys/timeet.h>
-//#include <sys/timetc.h>
-//#include <sys/watchdog.h>
 
 #include <dev/spibus/spi.h>
 #include <dev/spibus/spibusvar.h>
@@ -61,7 +58,6 @@
 #include <arm/xilinx/zy7_slcr.h>
 
 #include <machine/bus.h>
-//#include <machine/cpu.h>
 #include <machine/intr.h>
 
 #define	RD4(_sc, _reg) \
@@ -129,8 +125,9 @@
 #define SPI_ISR 	0x04 /* Interrupt status register */
 #define SPI_IER 	0x08 /* Interrupt enable register */
 #define SPI_IDR 	0x0c /* Interrupt disable register */
+#define SPI_IMR 	0x10 /* Interrupt mask register */
 	/* Interrupt flags are common to all interrupt registers */
-#define  IR_MASK   (  0xef)    /* interrupt bits mask */
+#define  IR_MASK   (  0x7f)    /* interrupt bits mask */
 #define  IR_ALL    IR_MASK     /* all interrupts */
 #define  IR_TXUF   (1 << 6)    /* Tx FIFO underflow */
 #define  IR_RXFULL (1 << 5)    /* Rx FIFO is full */
@@ -161,7 +158,7 @@
 //#define  TXTHLD_MAX_VAL    (FIFO_DEPTH - 1)
 #define SPI_RXTHLD	0x2C /* Rx FIFO threshold register. Defines when the */
                          /* RXNE interrupt is triggered */
-#define SPI_MODID	0x2C /* Module ID register */
+#define SPI_MODID	0xFC /* Module ID register */
 #define  MODID_MASK  (0xffffff)
 
 #define CSPI_LINE_CLK_MIO_DEFAULT  50000000
@@ -228,6 +225,18 @@ struct cspi_softc {
 	struct xfer_control	pcb;
 };
 
+
+static void
+dump_registers(struct cspi_softc *sc)
+{
+	CSPI_ASSERT_LOCKED(sc);
+	int regs[] = { SPI_CR, SPI_IMR, SPI_ER, SPI_DR, SPI_TXTHLD, SPI_RXTHLD,
+	    SPI_MODID };
+	for (int i=0; i < nitems(regs); ++i)
+		device_printf(sc->dev, "reg[0x%02x] = 0x%08x\n",
+		    regs[i], RD4(sc, regs[i]));
+}
+
 static void
 cspi_modifyreg(struct cspi_softc *sc, uint32_t off, uint32_t mask,
     uint32_t value)
@@ -268,7 +277,6 @@ static bool
 xfer_is_busy(struct cspi_softc *sc)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA xfer_is_busy\n");
 	struct xfer_control *pcb = &sc->pcb;
 	return pcb->xfer_state != xfer_state_idle;
 }
@@ -277,7 +285,6 @@ static bool
 xfer_is_awaiting_rx(struct cspi_softc *sc)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA xfer_is_awaiting_rx\n");
 	struct xfer_control *pcb = &sc->pcb;
 	return pcb->xfer_state == xfer_state_awaiting_rx;
 }
@@ -286,7 +293,6 @@ static bool
 xfer_has_more_to_send(struct cspi_softc *sc)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA xfer_has_more_to_send\n");
 	struct xfer_control *pcb = &sc->pcb;
 	return pcb->xfer_written < pcb->xfer_size;
 }
@@ -294,8 +300,12 @@ device_printf(sc->dev, "**GA xfer_has_more_to_send\n");
 static void
 cspi_assert_slave(struct cspi_softc *sc, int cs)
 {
+	CSPI_ASSERT_LOCKED(sc);
 device_printf(sc->dev, "**GA cspi_assert_slave\n");
-	cspi_modifyreg(sc, SPI_CR, CR_CSL_MASK, CR_CSL(cs));
+	uint32_t reg = RD4(sc, SPI_CR);
+	reg |= CR_CSL_MASK;
+	reg &= CR_CSL(cs);
+	WR4(sc, SPI_CR, reg);
 }
 
 static void
@@ -309,13 +319,11 @@ static int
 cspi_fill_txfifo(struct cspi_softc *sc, const char *begin, int how_many)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA cspi_fill_txfifo\n");
-	struct xfer_control *pcb = &sc->pcb;
 	/* Don't overflow the depth of the FIFO */
 	const int depth = (how_many < FIFO_DEPTH) ? how_many : FIFO_DEPTH;
+device_printf(sc->dev, "**GA cspi_fill_txfifo to depth of %d bytes\n", depth);
 	for (int i=0; i < depth; ++i)
 		WR4(sc, SPI_TXD, begin[i]);
-	pcb->xfer_written += depth;
 	return depth;
 }
 
@@ -323,10 +331,10 @@ static bool
 cspi_drain_rxfifo(struct cspi_softc *sc)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA cspi_drain_rxfifo\n");
 	bool result = true;
 	struct xfer_control *pcb = &sc->pcb;
 	const int to_read = pcb->xfer_written - pcb->xfer_read;
+device_printf(sc->dev, "**GA cspi_drain_rxfifo of %d bytes\n", to_read);
 	KASSERT( to_read > 0 && to_read <= FIFO_DEPTH,
 	    ("%s: Invalid read size, %d bytes", __func__, to_read));
 	char *cmd_ptr = (char *)pcb->xfer_cmd->rx_cmd;
@@ -366,23 +374,40 @@ device_printf(sc->dev, "**GA cspi_drain_rxfifo\n");
 }
 
 static void
-cspi_set_fifo_threshold(struct cspi_softc *sc, int how_many)
+cspi_set_rxfifo_threshold(struct cspi_softc *sc, int how_many)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA cspi_set_fifo_threshold\n");
+device_printf(sc->dev, "**GA cspi_set_rxfifo_threshold to %d bytes\n", how_many);
 	WR4(sc, SPI_RXTHLD, how_many);
 }
+
+static uint32_t
+cspi_interrupts_mask(struct cspi_softc *sc)
+{
+	CSPI_ASSERT_LOCKED(sc);
+	const uint32_t val = RD4(sc, SPI_IMR);
+device_printf(sc->dev, "**GA cspi_interrupts_mask = 0x%08x\n", val);
+	return val;
+}
+
+static void cspi_disable_interrupts(struct cspi_softc *sc);
 
 static void
 cspi_enable_interrupts(struct cspi_softc *sc)
 {
 	CSPI_ASSERT_LOCKED(sc);
 device_printf(sc->dev, "**GA cspi_enable_interrupts\n");
-	WR4(sc, SPI_IER,
+	cspi_disable_interrupts(sc);
+	const int intr_flags =
 	    IR_TXUF | IR_RXOF | IR_MODF /* error conditions */
 	    | IR_TXNOTFULL /* tx fifo has been put out on the wire */
-	    | IR_RXNE  /* rx fifo contains the entire response */
-	    );
+	    | IR_RXNE;  /* rx fifo contains the entire response */
+	WR4(sc, SPI_IER, intr_flags);
+	BW(sc);
+	DELAY(50);
+	uint32_t reg = RD4(sc, SPI_IMR);
+	KASSERT((reg & IR_MASK) == intr_flags,
+	    ("%s: Interrupt enable failed", __func__));
 }
 
 static void
@@ -390,8 +415,7 @@ cspi_start_transfer(struct cspi_softc *sc)
 {
 device_printf(sc->dev, "**GA cspi_start_transfer\n");
 	cspi_enable_interrupts(sc);
-	cspi_enable_controller(sc);
-	cspi_modifyreg(sc, SPI_CR, CR_MSE, CR_MSE);
+	cspi_modifyreg(sc, SPI_CR, CR_MSTC, CR_MSTC);
 }
 
 static void
@@ -399,7 +423,13 @@ cspi_disable_interrupts(struct cspi_softc *sc)
 {
 	CSPI_ASSERT_LOCKED(sc);
 device_printf(sc->dev, "**GA cspi_disable_interrupts\n");
+	(void) cspi_interrupts_mask(sc);
 	WR4(sc, SPI_IDR, IR_ALL);
+	BW(sc);
+	DELAY(50);
+	uint32_t reg = cspi_interrupts_mask(sc);
+	KASSERT((reg & IR_MASK) == IR_ALL,
+	    ("%s: Interrupt disable failed", __func__));
 }
 
 static void
@@ -458,7 +488,6 @@ device_printf(sc->dev, "**GA xfer_move_to_tx_progress\n");
 	KASSERT(pcb->xfer_cmd != NULL,
 	    ("%s: Missing transfer command ", __func__));
 	pcb->xfer_state = xfer_state_tx_progress;
-	const char *start = NULL;
 	int how_many = 0;
 	const char *cmd_ptr = (const char *)pcb->xfer_cmd->tx_cmd;
 	const int cmd_size = (int)pcb->xfer_cmd->tx_cmd_sz;
@@ -469,6 +498,7 @@ device_printf(sc->dev, "**GA xfer_move_to_tx_progress\n");
 	const bool doing_cmd = pcb->xfer_written < cmd_size ? true : false;
 
 	/* either transferring portions of the cmd or data */
+	const char *start = NULL;
 	if (doing_cmd) {
 		start = &cmd_ptr[pcb->xfer_written];
 		how_many = cmd_size - pcb->xfer_written;
@@ -477,8 +507,9 @@ device_printf(sc->dev, "**GA xfer_move_to_tx_progress\n");
 		start = &data_ptr[begin];
 		how_many = data_size - begin;
 	}
-	int queued = cspi_fill_txfifo(sc, start, how_many);
-	cspi_set_fifo_threshold(sc, queued);
+	cspi_enable_controller(sc);
+	const int queued = cspi_fill_txfifo(sc, start, how_many);
+	cspi_set_rxfifo_threshold(sc, queued);
 	pcb->xfer_written += queued;
 	cspi_start_transfer(sc);
 }
@@ -501,31 +532,40 @@ cspi_intr(void *arg)
 {
 	struct cspi_softc *sc = (struct cspi_softc *)arg;
 	bool done = false;
+device_printf(sc->dev, "**GA %s\n", __func__);
 	CSPI_LOCK(sc);
+
+	cspi_disable_interrupts(sc);
+	uint32_t stat = cspi_read_interrupt_status(sc);
 
 	/* Ignore the interrupt if we're not performing a transfer */
 	if (!xfer_is_busy(sc)) {
+device_printf(sc->dev, "**GA %s - interrupt ignored\n", __func__);
 		CSPI_UNLOCK(sc);
 		return;
 	}
 
-	cspi_disable_interrupts(sc);
-	uint32_t stat = cspi_read_interrupt_status(sc);
-	if ((stat & IR_TXNOTFULL) && !xfer_in_error(sc))
+	if ((stat & IR_TXNOTFULL) && !xfer_in_error(sc)) {
+device_printf(sc->dev, "**GA %s - IR_TXNOTFULL\n", __func__);
 		xfer_move_to_awaiting_rx(sc);
+	}
 	if ((stat & IR_RXNE) && !xfer_in_error(sc)
 	    && xfer_is_awaiting_rx(sc)) {
+device_printf(sc->dev, "**GA %s - IR_RXNE\n", __func__);
 		/* all rx data has arrived. */
 		bool ok = cspi_drain_rxfifo(sc);
-		if (ok && xfer_has_more_to_send(sc))
+		if (ok && xfer_has_more_to_send(sc)) {
+device_printf(sc->dev, "**GA %s - Has more to send\n", __func__);
 			xfer_move_to_tx_progress(sc);
-		else
+		} else
 			done = true;
 	}
 	if ((stat & IR_TXUF) && !xfer_in_error(sc))
 		xfer_set_error_message(sc, "Tx underflow occurred");
 	if ((stat & IR_RXOF) && !xfer_in_error(sc))
 		xfer_set_error_message(sc, "Rx overflow occurred");
+	if ((stat & IR_MODF) && !xfer_in_error(sc))
+		xfer_set_error_message(sc, "Mode fault occurred");
 
 	if (done || xfer_in_error(sc)) {
 		cspi_end_transfer(sc);
@@ -574,17 +614,20 @@ cspi_transfer(device_t dev, device_t child, struct spi_command *cmd)
 	/* Now it's our turn. */
 	sc->pcb.xfer_cmd = cmd;
 	sc->pcb.xfer_size = (int)cmd->tx_cmd_sz + (int)cmd->tx_data_sz;
+//GA
+dump_registers(sc);
 	cspi_assert_slave(sc, cs);
 	xfer_move_to_tx_progress(sc);
-
+//GA
+dump_registers(sc);
 	/* Sleep Waiting for the trasfer to complete, or timeout */
 	int err = mtx_sleep(dev, &sc->sc_mtx, 0, "cspi", hz * 2);
 
 	/* Check for transfer timeout. */
 	if (err == EWOULDBLOCK) {
-		cspi_end_transfer(sc);
 		if (!xfer_in_error(sc))
 			xfer_set_error_message(sc, "SPI transfer timeout");
+		cspi_end_transfer(sc);
 	}
 
 	/* Report any error */
@@ -597,6 +640,8 @@ cspi_transfer(device_t dev, device_t child, struct spi_command *cmd)
 	 * this transfer to complete.
 	 */
 	wakeup_one(dev);
+//GA
+dump_registers(sc);
 	CSPI_UNLOCK(sc);
 
 	return err;
@@ -628,6 +673,20 @@ cspi_softc_init(struct cspi_softc *sc, device_t dev)
 	CSPI_LOCK(sc);
 	xfer_move_to_idle(sc);
 	CSPI_UNLOCK(sc);
+}
+
+static uint8_t
+divisor_as_field(int divisor)
+{
+	switch (divisor) {
+	case 4: return CR_BR_DIV_4;
+	case 8: return CR_BR_DIV_8;
+	case 16: return CR_BR_DIV_16;
+	case 32: return CR_BR_DIV_32;
+	case 64: return CR_BR_DIV_64;
+	case 128: return CR_BR_DIV_128;
+	default: return CR_BR_DIV_256;
+	}
 }
 
 static int
@@ -663,7 +722,7 @@ config_init(device_t dev)
 	reg |= CR_MFG;
 	reg |= CR_MSE;
 	reg |= CR_CSL_NONE; /* no slaves selected at this time */
-	reg |= ((divisor >> 1) << CR_BR_DIV_SHIFT);
+	reg |= divisor_as_field(divisor);
 	reg |= CR_CLK_PH_INACT;
 	reg |= CR_CLK_POL_HIGH;
 	reg |= CR_MODE_MASTER; /* Only master mode is supported */
@@ -733,12 +792,12 @@ cspi_attach(device_t dev)
 	 */
 	if (!clocks_done) {
 		/* SPI 0 and 1 occupy the MIO pin region 28-39. */
-		if (!zy7_mio_unmap_pin_range(28,39)
+/*		if (!zy7_mio_unmap_pin_range(28,39)
 		    || !cspi_map_spi0_pins()
 		    || !cspi_map_spi1_pins()) {
 			device_printf(dev, "MIO routing failed\n");
 			return ENXIO;
-		}
+		}*/
 
 		error = init_clocks();
 		if (error) {
@@ -776,7 +835,7 @@ cspi_attach(device_t dev)
 	sc->mem_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid,
 	    RF_ACTIVE);
 	if (!sc->mem_res) {
-		device_printf(dev, "could not allocate mempry resource\n");
+		device_printf(dev, "could not allocate memory resource\n");
 		goto err;
 	}
 
