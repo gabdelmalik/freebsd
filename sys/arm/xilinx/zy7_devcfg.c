@@ -409,7 +409,7 @@ zy7_devcfg_init_hw(struct zy7_devcfg_softc *sc)
 
 	/* Set devcfg control register. */
 	WR4(sc, ZY7_DEVCFG_CTRL,
-//GA	    ZY7_DEVCFG_CTRL_PCFG_PROG_B |
+	    ZY7_DEVCFG_CTRL_PCFG_PROG_B |
 	    ZY7_DEVCFG_CTRL_PCAP_PR |
 	    ZY7_DEVCFG_CTRL_PCAP_MODE |
 //GA	    ZY7_DEVCFG_CTRL_USER_MODE |
@@ -448,17 +448,17 @@ zy7_devcfg_reset_pl(struct zy7_devcfg_softc *sc)
 	 * Wait for INIT to assert.  If it is already asserted, we may not get
 	 * an edge interrupt so cancel it and continue.
 	 */
-//GA	if ((RD4(sc, ZY7_DEVCFG_STATUS) &
-//GA	     ZY7_DEVCFG_STATUS_PCFG_INIT) != 0) {
-//GA		/* Already asserted.  Cancel interrupt. */
-//GA		WR4(sc, ZY7_DEVCFG_INT_MASK, ~0);
-//GA	}
-//GA	else {
-//GA		/* Wait for positive edge interrupt. */
+	if ((RD4(sc, ZY7_DEVCFG_STATUS) &
+	     ZY7_DEVCFG_STATUS_PCFG_INIT) != 0) {
+		/* Already asserted.  Cancel interrupt. */
+		WR4(sc, ZY7_DEVCFG_INT_MASK, ~0);
+	}
+	else {
+		/* Wait for positive edge interrupt. */
 		err = mtx_sleep(sc, &sc->sc_mtx, PCATCH, "zy7i1", hz);
 		if (err != 0)
 			return (err);
-//GA	}
+	}
 	
 	/* Reassert PROG_B (active low). */
 	devcfg_ctl &= ~ZY7_DEVCFG_CTRL_PCFG_PROG_B;
