@@ -90,7 +90,8 @@
 #define  CR_MSTC (1 << 16)       /* Manual start command, 0 means auto */
 #define  CR_MSE  (1 << 15)       /* Manual start enable, 0 means auto */
 #define  CR_MCS  (1 << 14)       /* Manual chip-select enable, 0 means auto */
-#define  CR_CSL_NONE (0xf << 10) /* No slave selected */
+#define  CR_CSL_SHIFT	10 
+#define  CR_CSL_NONE (0xf << CR_CSL_SHIFT) /* No slave selected */
 #define  CR_CSL_MASK CR_CSL_NONE /* mask slave select bits */
    /* At most one of these chip-select line values, and it MUST be ANDed
     * since active bit is '0' (zero), e.g.
@@ -100,7 +101,7 @@
 //#define   CR_CSL_0	(~(1 << 10))  /* select slave 0 */
 //#define   CR_CSL_1	(~(1 << 11))  /* select slave 1 */
 //#define   CR_CSL_2	(~(1 << 12))  /* select slave 2 */
-#define   CR_CSL(num)	(~(1 << (10 + (num)))) /* select slave line number */
+//GA #define   CR_CSL(num)	(~(1 << (10 + (num)))) /* select slave line number */
    /* SPI line clock baud rate divisor */
 #define  CR_BR_DIV_SHIFT 3
 #define  CR_BR_DIV_MIN 4
@@ -117,10 +118,10 @@
 #define   CR_BR_DIV_64  (5 << CR_BR_DIV_SHIFT)  /* " " 64 */
 #define   CR_BR_DIV_128 (6 << CR_BR_DIV_SHIFT)  /* " " 128 */
 #define   CR_BR_DIV_256 (7 << CR_BR_DIV_SHIFT)  /* " " 256 */
-#define  CR_CLK_PH_INACT (1 << 2) /* Clock phase inactive outside SPI word, */
-                                  /* otherwise it will be active, */
-#define  CR_CLK_POL_HIGH (1 << 1) /* Clock polarity is high outside SPI word */
-				  /* otherwise it will be low. */
+#define  CR_CLK_PH_FALLING (1 << 2) /* Clock phase falling edge active, */
+                                  /* otherwise rising edge active, */
+#define  CR_CLK_POL_HIGH (1 << 1) /* Clock inactive polarity is high */
+				  /* otherwise it is low. */
 #define  CR_MODE_MASTER (1)  /* Is SPI Master, otherwise slave */
 #define SPI_ISR 	0x04 /* Interrupt status register */
 #define SPI_IER 	0x08 /* Interrupt enable register */
@@ -132,7 +133,7 @@
 #define  IR_TXUF   (1 << 6)    /* Tx FIFO underflow */
 #define  IR_RXFULL (1 << 5)    /* Rx FIFO is full */
 #define  IR_RXNE   (1 << 4)    /* Rx FIFO not empty, or >= threshold */
-#define  IR_TXFULL (1 << 3)    /* Tx FIFO is full*/
+#define  IR_TXFULL (1 << 3)    /* Tx FIFO is full */
 #define  IR_TXNOTFULL (1 << 2) /* Tx FIFO is < threshold */
 #define  IR_MODF   (1 << 1)    /* Mode fault */
 #define  IR_RXOF   (1)         /* Rx FIFO overflow */
@@ -301,17 +302,28 @@ static void
 cspi_assert_slave(struct cspi_softc *sc, int cs)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA cspi_assert_slave\n");
-	uint32_t reg = RD4(sc, SPI_CR);
-	reg |= CR_CSL_MASK;
-	reg &= CR_CSL(cs);
-	WR4(sc, SPI_CR, reg);
+	unsigned cs_field;
+	switch(cs){
+	case 0:
+		cs_field = 0xe;
+		break;
+	case 1:
+		cs_field = 0xd;
+		break;
+	case 2:
+		cs_field = 0xb;
+		break;
+	default:
+		cs_field = 0xf;
+	}
+//GA device_printf(sc->dev, "**GA cspi_assert_slave %d\n", cs);
+	cspi_modifyreg(sc, SPI_CR, CR_CSL_MASK, (cs_field << CR_CSL_SHIFT));
 }
 
 static void
 cspi_enable_controller(struct cspi_softc *sc)
 {
-device_printf(sc->dev, "**GA cspi_enable_controller\n");
+//GA device_printf(sc->dev, "**GA %s\n", __func__);
 	cspi_modifyreg(sc, SPI_ER, ER_MASK, ER_ENABLE);
 }
 
@@ -321,7 +333,7 @@ cspi_fill_txfifo(struct cspi_softc *sc, const char *begin, int how_many)
 	CSPI_ASSERT_LOCKED(sc);
 	/* Don't overflow the depth of the FIFO */
 	const int depth = (how_many < FIFO_DEPTH) ? how_many : FIFO_DEPTH;
-device_printf(sc->dev, "**GA cspi_fill_txfifo to depth of %d bytes\n", depth);
+//GA device_printf(sc->dev, "**GA %s to depth of %d bytes\n", __func__, depth);
 	for (int i=0; i < depth; ++i)
 		WR4(sc, SPI_TXD, begin[i]);
 	return depth;
@@ -334,7 +346,7 @@ cspi_drain_rxfifo(struct cspi_softc *sc)
 	bool result = true;
 	struct xfer_control *pcb = &sc->pcb;
 	const int to_read = pcb->xfer_written - pcb->xfer_read;
-device_printf(sc->dev, "**GA cspi_drain_rxfifo of %d bytes\n", to_read);
+//GA device_printf(sc->dev, "**GA %s of %d bytes\n", __func__, to_read);
 	KASSERT( to_read > 0 && to_read <= FIFO_DEPTH,
 	    ("%s: Invalid read size, %d bytes", __func__, to_read));
 	char *cmd_ptr = (char *)pcb->xfer_cmd->rx_cmd;
@@ -377,101 +389,83 @@ static void
 cspi_set_rxfifo_threshold(struct cspi_softc *sc, int how_many)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA cspi_set_rxfifo_threshold to %d bytes\n", how_many);
+//GA device_printf(sc->dev, "**GA %s to %d bytes\n", __func__, how_many);
 	WR4(sc, SPI_RXTHLD, how_many);
 }
-
-static uint32_t
-cspi_interrupts_mask(struct cspi_softc *sc)
-{
-	CSPI_ASSERT_LOCKED(sc);
-	const uint32_t val = RD4(sc, SPI_IMR);
-device_printf(sc->dev, "**GA cspi_interrupts_mask = 0x%08x\n", val);
-	return val;
-}
-
-static void cspi_disable_interrupts(struct cspi_softc *sc);
 
 static void
 cspi_enable_interrupts(struct cspi_softc *sc)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA cspi_enable_interrupts\n");
-	cspi_disable_interrupts(sc);
-	const int intr_flags =
+//GA device_printf(sc->dev, "**GA %s\n", __func__);
+	const uint32_t intr_flags =
 	    IR_TXUF | IR_RXOF | IR_MODF /* error conditions */
 	    | IR_TXNOTFULL /* tx fifo has been put out on the wire */
-	    | IR_RXNE;  /* rx fifo contains the entire response */
+;//GA	    | IR_RXNE;  /* rx fifo contains the entire response */
 	WR4(sc, SPI_IER, intr_flags);
-	BW(sc);
-	DELAY(50);
-	uint32_t reg = RD4(sc, SPI_IMR);
-	KASSERT((reg & IR_MASK) == intr_flags,
-	    ("%s: Interrupt enable failed", __func__));
 }
+
+//GA static void
+//GA cspi_enable_interrupt(struct cspi_softc *sc, unsigned intr_flags)
+//GA {
+//GA 	CSPI_ASSERT_LOCKED(sc);
+//GA device_printf(sc->dev, "**GA cspi_enable_interrupt, flags 0x%02x\n", intr_flags);
+//GA 	WR4(sc, SPI_IER, intr_flags);
+//GA }
 
 static void
 cspi_start_transfer(struct cspi_softc *sc)
 {
-device_printf(sc->dev, "**GA cspi_start_transfer\n");
 	cspi_enable_interrupts(sc);
-	cspi_modifyreg(sc, SPI_CR, CR_MSTC, CR_MSTC);
+//GA device_printf(sc->dev, "**GA %s\n", __func__);
 }
 
+
 static void
-cspi_disable_interrupts(struct cspi_softc *sc)
+cspi_disable_interrupts(struct cspi_softc *sc, unsigned intr_flags)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA cspi_disable_interrupts\n");
-	(void) cspi_interrupts_mask(sc);
-	WR4(sc, SPI_IDR, IR_ALL);
-	BW(sc);
-	DELAY(50);
-	uint32_t reg = cspi_interrupts_mask(sc);
-	KASSERT((reg & IR_MASK) == IR_ALL,
-	    ("%s: Interrupt disable failed", __func__));
+//GA device_printf(sc->dev, "**GA %s, flags 0x%02x\n", __func__, intr_flags);
+	WR4(sc, SPI_IDR, intr_flags);
 }
 
 static void
 cspi_disable_controller(struct cspi_softc *sc)
 {
-device_printf(sc->dev, "**GA cspi_disable_controller\n");
+//GA device_printf(sc->dev, "**GA %s\n", __func__);
 	cspi_modifyreg(sc, SPI_ER, ER_MASK, 0);
 }
 
 static void
 cspi_deassert_slaves(struct cspi_softc *sc)
 {
-device_printf(sc->dev, "**GA cspi_deassert_slaves\n");
+//GA device_printf(sc->dev, "**GA %s\n", __func__);
 	cspi_modifyreg(sc, SPI_CR, CR_CSL_MASK, CR_CSL_NONE);
+}
+
+static void
+cspi_clear_interrupts(struct cspi_softc *sc, unsigned intr_flags)
+{
+	CSPI_ASSERT_LOCKED(sc);
+//GA device_printf(sc->dev, "**GA %s, flags 0x%02x\n", __func__, intr_flags);
+	WR4(sc, SPI_ISR, intr_flags);
 }
 
 static uint32_t
 cspi_read_interrupt_status(struct cspi_softc *sc)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA cspi_read_interrupt_status\n");
+//GA device_printf(sc->dev, "**GA %s\n", __func__);
 	return RD4(sc, SPI_ISR);
 }
 
 static void xfer_move_to_idle(struct cspi_softc *sc);
 
 static void
-cspi_end_transfer(struct cspi_softc *sc)
-{
-device_printf(sc->dev, "**GA cspi_end_transfer\n");
-	cspi_disable_interrupts(sc);
-	cspi_disable_controller(sc);
-	cspi_deassert_slaves(sc);
-/* TODO also clear tx/rx fifo incase of aborted transfer */
-	xfer_move_to_idle(sc);
-}
-
-static void
 xfer_move_to_idle(struct cspi_softc *sc)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA xfer_move_to_idle\n");
+//GA device_printf(sc->dev, "**GA %s\n", __func__);
 	struct xfer_control *pcb = &sc->pcb;
 	pcb->xfer_state = xfer_state_idle;
 	pcb->xfer_cmd = NULL;
@@ -483,7 +477,7 @@ static void
 xfer_move_to_tx_progress(struct cspi_softc *sc)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA xfer_move_to_tx_progress\n");
+//GA device_printf(sc->dev, "**GA %s\n", __func__);
 	struct xfer_control *pcb = &sc->pcb;
 	KASSERT(pcb->xfer_cmd != NULL,
 	    ("%s: Missing transfer command ", __func__));
@@ -507,9 +501,8 @@ device_printf(sc->dev, "**GA xfer_move_to_tx_progress\n");
 		start = &data_ptr[begin];
 		how_many = data_size - begin;
 	}
-	cspi_enable_controller(sc);
 	const int queued = cspi_fill_txfifo(sc, start, how_many);
-	cspi_set_rxfifo_threshold(sc, queued);
+//GA	cspi_set_rxfifo_threshold(sc, queued);
 	pcb->xfer_written += queued;
 	cspi_start_transfer(sc);
 }
@@ -518,13 +511,12 @@ static void
 xfer_move_to_awaiting_rx(struct cspi_softc *sc)
 {
 	CSPI_ASSERT_LOCKED(sc);
-device_printf(sc->dev, "**GA xfer_move_to_awaiting_rx\n");
+//GA device_printf(sc->dev, "**GA %s\n", __func__);
 	struct xfer_control *pcb = &sc->pcb;
 	KASSERT(pcb->xfer_state == xfer_state_tx_progress,
 	    ("%s: transition to awaiting_rx is only permitted from "
-	     "Only transition from tx_progress", __func__));
+	     "from tx_progress", __func__));
 	pcb->xfer_state = xfer_state_awaiting_rx;
-	cspi_enable_interrupts(sc);
 }
 
 static void
@@ -532,30 +524,36 @@ cspi_intr(void *arg)
 {
 	struct cspi_softc *sc = (struct cspi_softc *)arg;
 	bool done = false;
-device_printf(sc->dev, "**GA %s\n", __func__);
 	CSPI_LOCK(sc);
 
-	cspi_disable_interrupts(sc);
+	
 	uint32_t stat = cspi_read_interrupt_status(sc);
+//GA device_printf(sc->dev, "**GA %s status 0x%08x\n", __func__, stat);
 
 	/* Ignore the interrupt if we're not performing a transfer */
 	if (!xfer_is_busy(sc)) {
-device_printf(sc->dev, "**GA %s - interrupt ignored\n", __func__);
+//GA device_printf(sc->dev, "**GA %s - interrupt ignored\n", __func__);
+		cspi_disable_interrupts(sc, IR_ALL);
+		cspi_clear_interrupts(sc, IR_ALL);
 		CSPI_UNLOCK(sc);
 		return;
 	}
 
 	if ((stat & IR_TXNOTFULL) && !xfer_in_error(sc)) {
-device_printf(sc->dev, "**GA %s - IR_TXNOTFULL\n", __func__);
-		xfer_move_to_awaiting_rx(sc);
-	}
-	if ((stat & IR_RXNE) && !xfer_in_error(sc)
-	    && xfer_is_awaiting_rx(sc)) {
-device_printf(sc->dev, "**GA %s - IR_RXNE\n", __func__);
+//GA device_printf(sc->dev, "**GA %s - IR_TXNOTFULL\n", __func__);
+		cspi_disable_interrupts(sc, IR_TXNOTFULL);
+		cspi_clear_interrupts(sc, IR_TXNOTFULL);
+//GA		xfer_move_to_awaiting_rx(sc);
+//GA	}
+//GA	if ((stat & IR_RXNE) && !xfer_in_error(sc)
+//GA	    && xfer_is_awaiting_rx(sc)) {
+//GAdevice_printf(sc->dev, "**GA %s - IR_RXNE\n", __func__);
+//GA		cspi_disable_interrupts(sc, IR_RXNE);
+//GA		cspi_clear_interrupts(sc, IR_RXNE);
 		/* all rx data has arrived. */
 		bool ok = cspi_drain_rxfifo(sc);
 		if (ok && xfer_has_more_to_send(sc)) {
-device_printf(sc->dev, "**GA %s - Has more to send\n", __func__);
+//GA device_printf(sc->dev, "**GA %s - Has more to send\n", __func__);
 			xfer_move_to_tx_progress(sc);
 		} else
 			done = true;
@@ -568,7 +566,7 @@ device_printf(sc->dev, "**GA %s - Has more to send\n", __func__);
 		xfer_set_error_message(sc, "Mode fault occurred");
 
 	if (done || xfer_in_error(sc)) {
-		cspi_end_transfer(sc);
+//GA		cspi_end_transfer(sc);
 		/* awake the requester of this completed transfer */
 		wakeup(sc->dev);
 	}
@@ -609,25 +607,23 @@ cspi_transfer(device_t dev, device_t child, struct spi_command *cmd)
 	 * transfer to complete before proceeding.
 	 */
 	  while (xfer_is_busy(sc))
-		mtx_sleep(dev, &sc->sc_mtx, 0, "cspi", 0);
+		mtx_sleep(dev, &sc->sc_mtx, 0, "cspi - pending", 0);
 
 	/* Now it's our turn. */
 	sc->pcb.xfer_cmd = cmd;
 	sc->pcb.xfer_size = (int)cmd->tx_cmd_sz + (int)cmd->tx_data_sz;
-//GA
-dump_registers(sc);
+//GA dump_registers(sc);
 	cspi_assert_slave(sc, cs);
+	cspi_enable_controller(sc);
 	xfer_move_to_tx_progress(sc);
-//GA
-dump_registers(sc);
+//GA dump_registers(sc);
 	/* Sleep Waiting for the trasfer to complete, or timeout */
-	int err = mtx_sleep(dev, &sc->sc_mtx, 0, "cspi", hz * 2);
+	int err = mtx_sleep(dev, &sc->sc_mtx, 0, "cspi - inprogress", hz * 2);
 
 	/* Check for transfer timeout. */
 	if (err == EWOULDBLOCK) {
 		if (!xfer_in_error(sc))
 			xfer_set_error_message(sc, "SPI transfer timeout");
-		cspi_end_transfer(sc);
 	}
 
 	/* Report any error */
@@ -635,13 +631,19 @@ dump_registers(sc);
 		device_printf(dev, "%s\n", xfer_get_error_message(sc));
 		err = EIO;
 	}
+
+	cspi_disable_interrupts(sc, IR_ALL);
+	cspi_clear_interrupts(sc, IR_ALL);
+	cspi_disable_controller(sc);
+	cspi_deassert_slaves(sc);
+/* TODO also clear tx/rx fifo incase of aborted transfer */
+	xfer_move_to_idle(sc);
 	
 	/* Awake the next requester which would have slept waiting for
 	 * this transfer to complete.
 	 */
 	wakeup_one(dev);
-//GA
-dump_registers(sc);
+//GA dump_registers(sc);
 	CSPI_UNLOCK(sc);
 
 	return err;
@@ -720,16 +722,13 @@ config_init(device_t dev)
 
 	int reg = 0;
 	reg |= CR_MFG;
-	reg |= CR_MSE;
+//GA	reg |= CR_MSE;
+	reg |= CR_MCS;
 	reg |= CR_CSL_NONE; /* no slaves selected at this time */
 	reg |= divisor_as_field(divisor);
-	reg |= CR_CLK_PH_INACT;
-	reg |= CR_CLK_POL_HIGH;
+	reg |= CR_CLK_PH_FALLING;
 	reg |= CR_MODE_MASTER; /* Only master mode is supported */
 	WR4(sc, SPI_CR, reg);
-//TODO is this really necessary ???
-	BW(sc); /* ensure config is written before any later data transfer
-	         * attempts that may occur. */
 
 	if (bootverbose)
 		device_printf(dev, "master clock frequency %dHz\n",
