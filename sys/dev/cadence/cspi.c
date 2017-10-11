@@ -65,11 +65,11 @@
 #define	WR4(_sc, _reg, _val) \
 	bus_write_4((_sc)->mem_res, (_reg), (_val))
 #define BW(_sc) \
-	bus_barrier((_sc)->mem_res, 0, 0, BUS_SPACE_BARRIER_WRITE)
+	bus_barrier((_sc)->mem_res, 0, 0xff, BUS_SPACE_BARRIER_WRITE)
 #define BR(_sc) \
-	bus_barrier((_sc)->mem_res, 0, 0, BUS_SPACE_BARRIER_READ)
+	bus_barrier((_sc)->mem_res, 0, 0xff, BUS_SPACE_BARRIER_READ)
 #define BRW(_sc) \
-	bus_barrier((_sc)->mem_res, 0, 0, \
+	bus_barrier((_sc)->mem_res, 0, 0xff, \
 	    BUS_SPACE_BARRIER_READ | BUS_SPACE_BARRIER_WRITE)
 #define CSPI_LOCK(_sc) \
 	mtx_lock(&(_sc)->sc_mtx)
@@ -233,9 +233,11 @@ dump_registers(struct cspi_softc *sc)
 	CSPI_ASSERT_LOCKED(sc);
 	int regs[] = { SPI_CR, SPI_IMR, SPI_ER, SPI_DR, SPI_TXTHLD, SPI_RXTHLD,
 	    SPI_MODID };
-	for (int i=0; i < nitems(regs); ++i)
+	for (int i=0; i < nitems(regs); ++i) {
+		BRW(sc);
 		device_printf(sc->dev, "reg[0x%02x] = 0x%08x\n",
 		    regs[i], RD4(sc, regs[i]));
+	}
 }
 
 static void
@@ -243,9 +245,11 @@ cspi_modifyreg(struct cspi_softc *sc, uint32_t off, uint32_t mask,
     uint32_t value)
 {
 	CSPI_ASSERT_LOCKED(sc);
+	BRW(sc);
 	uint32_t reg = RD4(sc, off);
 	reg &= ~mask;
 	reg |= value;
+	BRW(sc);
 	WR4(sc, off, reg);
 }
 
@@ -334,8 +338,10 @@ cspi_fill_txfifo(struct cspi_softc *sc, const char *begin, int how_many)
 	/* Don't overflow the depth of the FIFO */
 	const int depth = (how_many < FIFO_DEPTH) ? how_many : FIFO_DEPTH;
 //GA device_printf(sc->dev, "**GA %s to depth of %d bytes\n", __func__, depth);
-	for (int i=0; i < depth; ++i)
+	for (int i=0; i < depth; ++i) {
+		BRW(sc);
 		WR4(sc, SPI_TXD, begin[i]);
+	}
 	return depth;
 }
 
@@ -377,6 +383,7 @@ cspi_drain_rxfifo(struct cspi_softc *sc)
 	 * rx buffer.
 	 */
 	for (int i=0; i < to_read; ++i) {
+		BRW(sc);
 		uint32_t d = RD4(sc, SPI_RXD);
 		if (i < to_store) 
 			*location++ = d;
@@ -390,6 +397,7 @@ cspi_set_rxfifo_threshold(struct cspi_softc *sc, int how_many)
 {
 	CSPI_ASSERT_LOCKED(sc);
 //GA device_printf(sc->dev, "**GA %s to %d bytes\n", __func__, how_many);
+//	BRW(sc);
 	WR4(sc, SPI_RXTHLD, how_many);
 }
 
@@ -402,6 +410,7 @@ cspi_enable_interrupts(struct cspi_softc *sc)
 	    IR_TXUF | IR_RXOF | IR_MODF /* error conditions */
 	    | IR_TXNOTFULL /* tx fifo has been put out on the wire */
 ;//GA	    | IR_RXNE;  /* rx fifo contains the entire response */
+//	BRW(sc);
 	WR4(sc, SPI_IER, intr_flags);
 }
 
@@ -426,6 +435,7 @@ cspi_disable_interrupts(struct cspi_softc *sc, unsigned intr_flags)
 {
 	CSPI_ASSERT_LOCKED(sc);
 //GA device_printf(sc->dev, "**GA %s, flags 0x%02x\n", __func__, intr_flags);
+//	BRW(sc);
 	WR4(sc, SPI_IDR, intr_flags);
 }
 
@@ -448,6 +458,7 @@ cspi_clear_interrupts(struct cspi_softc *sc, unsigned intr_flags)
 {
 	CSPI_ASSERT_LOCKED(sc);
 //GA device_printf(sc->dev, "**GA %s, flags 0x%02x\n", __func__, intr_flags);
+//	BRW(sc);
 	WR4(sc, SPI_ISR, intr_flags);
 }
 
@@ -456,6 +467,7 @@ cspi_read_interrupt_status(struct cspi_softc *sc)
 {
 	CSPI_ASSERT_LOCKED(sc);
 //GA device_printf(sc->dev, "**GA %s\n", __func__);
+//	BRW(sc);
 	return RD4(sc, SPI_ISR);
 }
 
@@ -728,6 +740,7 @@ config_init(device_t dev)
 	reg |= divisor_as_field(divisor);
 	reg |= CR_CLK_PH_FALLING;
 	reg |= CR_MODE_MASTER; /* Only master mode is supported */
+//        BRW(sc);
 	WR4(sc, SPI_CR, reg);
 
 	if (bootverbose)
