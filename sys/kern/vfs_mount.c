@@ -366,14 +366,15 @@ vfs_mergeopts(struct vfsoptlist *toopts, struct vfsoptlist *oldopts)
 /*
  * Mount a filesystem.
  */
+#ifndef _SYS_SYSPROTO_H_
+struct nmount_args {
+	struct iovec *iovp;
+	unsigned int iovcnt;
+	int flags;
+};
+#endif
 int
-sys_nmount(td, uap)
-	struct thread *td;
-	struct nmount_args /* {
-		struct iovec *iovp;
-		unsigned int iovcnt;
-		int flags;
-	} */ *uap;
+sys_nmount(struct thread *td, struct nmount_args *uap)
 {
 	struct uio *auio;
 	int error;
@@ -506,6 +507,8 @@ vfs_mount_destroy(struct mount *mp)
 	KASSERT(mp->mnt_ref == 0,
 	    ("%s: invalid refcount in the drain path @ %s:%d", __func__,
 	    __FILE__, __LINE__));
+	if (mp->mnt_vnodecovered != NULL)
+		vrele(mp->mnt_vnodecovered);
 	if (mp->mnt_writeopcount != 0)
 		panic("vfs_mount_destroy: nonzero writeopcount");
 	if (mp->mnt_secondary_writes != 0)
@@ -706,14 +709,7 @@ struct mount_args {
 #endif
 /* ARGSUSED */
 int
-sys_mount(td, uap)
-	struct thread *td;
-	struct mount_args /* {
-		char *type;
-		char *path;
-		int flags;
-		caddr_t data;
-	} */ *uap;
+sys_mount(struct thread *td, struct mount_args *uap)
 {
 	char *fstype;
 	struct vfsconf *vfsp = NULL;
@@ -825,6 +821,7 @@ vfs_domount_first(
 	error = VFS_MOUNT(mp);
 	if (error != 0) {
 		vfs_unbusy(mp);
+		mp->mnt_vnodecovered = NULL;
 		vfs_mount_destroy(mp);
 		VI_LOCK(vp);
 		vp->v_iflag &= ~VI_MOUNT;
@@ -1432,7 +1429,7 @@ dounmount(struct mount *mp, int flags, struct thread *td)
 	EVENTHANDLER_INVOKE(vfs_unmounted, mp, td);
 	if (coveredvp != NULL) {
 		coveredvp->v_mountedhere = NULL;
-		vput(coveredvp);
+		VOP_UNLOCK(coveredvp, 0);
 	}
 	vfs_event_signal(NULL, VQ_UNMOUNT, 0);
 	if (mp == rootdevmp)
@@ -1544,11 +1541,7 @@ vfs_filteropt(struct vfsoptlist *opts, const char **legal)
  * with the address of the option.
  */
 int
-vfs_getopt(opts, name, buf, len)
-	struct vfsoptlist *opts;
-	const char *name;
-	void **buf;
-	int *len;
+vfs_getopt(struct vfsoptlist *opts, const char *name, void **buf, int *len)
 {
 	struct vfsopt *opt;
 
@@ -1761,11 +1754,7 @@ vfs_setopts(struct vfsoptlist *opts, const char *name, const char *value)
  * Returns ENOENT if the option is not found.
  */
 int
-vfs_copyopt(opts, name, dest, len)
-	struct vfsoptlist *opts;
-	const char *name;
-	void *dest;
-	int len;
+vfs_copyopt(struct vfsoptlist *opts, const char *name, void *dest, int len)
 {
 	struct vfsopt *opt;
 

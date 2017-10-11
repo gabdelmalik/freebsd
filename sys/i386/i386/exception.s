@@ -98,15 +98,16 @@ MCOUNT_LABEL(user)
 MCOUNT_LABEL(btrap)
 
 #define	TRAP(a)		pushl $(a) ; jmp alltraps
+#define	TRAP_NOEN(a)	pushl $(a) ; jmp alltraps_noen
 
 IDTVEC(div)
 	pushl $0; TRAP(T_DIVIDE)
 IDTVEC(dbg)
-	pushl $0; TRAP(T_TRCTRAP)
+	pushl $0; TRAP_NOEN(T_TRCTRAP)
 IDTVEC(nmi)
-	pushl $0; TRAP(T_NMI)
+	pushl $0; TRAP_NOEN(T_NMI)
 IDTVEC(bpt)
-	pushl $0; TRAP(T_BPTFLT)
+	pushl $0; TRAP_NOEN(T_BPTFLT)
 IDTVEC(dtrace_ret)
 	pushl $0; TRAP(T_DTRACE_RET)
 IDTVEC(ofl)
@@ -130,7 +131,7 @@ IDTVEC(stk)
 IDTVEC(prot)
 	TRAP(T_PROTFLT)
 IDTVEC(page)
-	TRAP(T_PAGEFLT)
+	TRAP_NOEN(T_PAGEFLT)
 IDTVEC(mchk)
 	pushl $0; TRAP(T_MCHK)
 IDTVEC(rsvd)
@@ -142,6 +143,21 @@ IDTVEC(align)
 IDTVEC(xmm)
 	pushl $0; TRAP(T_XMMFLT)
 
+	SUPERALIGN_TEXT
+	.globl	alltraps_noen
+alltraps_noen:
+	pushal
+	pushl	$0
+	movw	%ds,(%esp)
+	pushl	$0
+	movw	%es,(%esp)
+	pushl	$0
+	movw	%fs,(%esp)
+	SET_KERNEL_SREGS
+	cld
+	FAKE_MCOUNT(TF_EIP(%esp))
+	jmp	calltrap
+	
 	/*
 	 * All traps except ones for syscalls jump to alltraps.  If
 	 * interrupts were enabled when the trap occurred, then interrupts
@@ -164,6 +180,7 @@ alltraps:
 	movw	%fs,(%esp)
 alltraps_with_regs_pushed:
 	SET_KERNEL_SREGS
+	sti
 	cld
 	FAKE_MCOUNT(TF_EIP(%esp))
 calltrap:
@@ -183,21 +200,29 @@ calltrap:
 #ifdef KDTRACE_HOOKS
 	SUPERALIGN_TEXT
 IDTVEC(ill)
-	/* Check if there is no DTrace hook registered. */
-	cmpl	$0,dtrace_invop_jump_addr
+	/*
+	 * Check if a DTrace hook is registered.  The default (data) segment
+	 * cannot be used for this since %ds is not known good until we
+	 * verify that the entry was from kernel mode.
+	 */
+	cmpl	$0,%ss:dtrace_invop_jump_addr
 	je	norm_ill
 
-	/* Check if this is a user fault. */
-	cmpl	$GSEL_KPL, 4(%esp)	/* Check the code segment. */
-
-	/* If so, just handle it as a normal trap. */
+	/*
+	 * Check if this is a user fault.  If so, just handle it as a normal
+	 * trap.
+	 */
+	cmpl	$GSEL_KPL, 4(%esp)	/* Check the code segment */
 	jne	norm_ill
+	testl	$PSL_VM, 8(%esp)	/* and vm86 mode. */
+	jnz	norm_ill
 
 	/*
 	 * This is a kernel instruction fault that might have been caused
 	 * by a DTrace provider.
 	 */
-	pushal				/* Push all registers onto the stack. */
+	pushal
+	cld
 
 	/*
 	 * Set our jump address for the jump back in the event that
@@ -215,40 +240,6 @@ norm_ill:
 	pushl $0
 	TRAP(T_PRIVINFLT)
 #endif
-
-/*
- * Call gate entry for syscalls (lcall 7,0).
- * This is used by FreeBSD 1.x a.out executables and "old" NetBSD executables.
- *
- * The intersegment call has been set up to specify one dummy parameter.
- * This leaves a place to put eflags so that the call frame can be
- * converted to a trap frame. Note that the eflags is (semi-)bogusly
- * pushed into (what will be) tf_err and then copied later into the
- * final spot. It has to be done this way because esp can't be just
- * temporarily altered for the pushfl - an interrupt might come in
- * and clobber the saved cs/eip.
- */
-	SUPERALIGN_TEXT
-IDTVEC(lcall_syscall)
-	pushfl				/* save eflags */
-	popl	8(%esp)			/* shuffle into tf_eflags */
-	pushl	$7			/* sizeof "lcall 7,0" */
-	pushl	$0			/* tf_trapno */
-	pushal
-	pushl	$0
-	movw	%ds,(%esp)
-	pushl	$0
-	movw	%es,(%esp)
-	pushl	$0
-	movw	%fs,(%esp)
-	SET_KERNEL_SREGS
-	cld
-	FAKE_MCOUNT(TF_EIP(%esp))
-	pushl	%esp
-	call	syscall
-	add	$4, %esp
-	MEXITCOUNT
-	jmp	doreti
 
 /*
  * Trap gate entry for syscalls (int 0x80).
@@ -271,6 +262,7 @@ IDTVEC(int0x80_syscall)
 	pushl	$0
 	movw	%fs,(%esp)
 	SET_KERNEL_SREGS
+	sti
 	cld
 	FAKE_MCOUNT(TF_EIP(%esp))
 	pushl	%esp
@@ -354,7 +346,7 @@ doreti_next:
 #ifdef HWPMC_HOOKS
 	je	doreti_nmi
 #else
-	je	doreti_exit
+	je	doreti_notvm86
 #endif
 	/*
 	 * PSL_VM must be checked first since segment registers only
@@ -370,7 +362,7 @@ doreti_next:
 
 doreti_notvm86:
 	testb	$SEL_RPL_MASK,TF_CS(%esp) /* are we returning to user mode? */
-	jz	doreti_exit		/* can't handle ASTs now if not */
+	jz	doreti_nosegs		/* can't handle ASTs now if not */
 
 doreti_ast:
 	/*
@@ -407,6 +399,12 @@ doreti_popl_es:
 	.globl	doreti_popl_ds
 doreti_popl_ds:
 	popl	%ds
+	jmp	doreti_iret_popal
+
+doreti_nosegs:
+	MEXITCOUNT
+	addl	$12,%esp
+doreti_iret_popal:
 	popal
 	addl	$8,%esp
 	.globl	doreti_iret
@@ -449,7 +447,7 @@ doreti_nmi:
 	 * needs a user call chain capture.
 	 */
 	testb	$SEL_RPL_MASK,TF_CS(%esp)
-	jz	doreti_exit
+	jz	doreti_nosegs
 	movl	PCPU(CURTHREAD),%eax	/* curthread present? */
 	orl	%eax,%eax
 	jz	doreti_exit
