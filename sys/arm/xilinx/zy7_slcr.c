@@ -860,18 +860,13 @@ zy7_dump_mio_pin_control_registers()
 {
 	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
 
-	device_printf(sc->dev,
-	    "MIO pin control register values\n");
-	device_printf(sc->dev,
-	    "-------------------------------\n");
+	device_printf(sc->dev, "MIO pin control register values\n");
+	device_printf(sc->dev, "-------------------------------\n");
 
 	ZSLCR_LOCK(sc);
 
-	for (int i = ZY7_SLCR_MIO_PIN_MIN;
-	    i <= ZY7_SLCR_MIO_PIN_MAX; ++i)
-		device_printf(sc->dev,
-		    "[%02d] 0x%08x\n",
-		    i, RD4(sc, ZY7_SLCR_MIO_PIN(i)));
+	for (int i = ZY7_SLCR_MIO_PIN_MIN; i <= ZY7_SLCR_MIO_PIN_MAX; ++i)
+		device_printf(sc->dev, "[%02d] 0x%08x\n", i, RD4(sc, ZY7_SLCR_MIO_PIN(i)));
 
 	ZSLCR_UNLOCK(sc);
 }
@@ -881,10 +876,8 @@ zy7_dump_all_other_registers()
 {
 	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
 
-	device_printf(sc->dev,
-	    "Other register values\n");
-	device_printf(sc->dev,
-	    "---------------------\n");
+	device_printf(sc->dev, "Other register values\n");
+	device_printf(sc->dev, "---------------------\n");
 
 	ZSLCR_LOCK(sc);
 
@@ -994,11 +987,8 @@ zy7_dump_all_other_registers()
 		ZY7_SLCR_DDRIOB_DCI_CTRL,
 		ZY7_SLCR_DDRIOB_DCI_STATUS
 	};
-	for (int i = ;
-	    i <= sizeof(reg_list)/sizeof(reg_list[0]); ++i)
-		device_printf(sc->dev,
-		    "[0x%08x] 0x%08x\n",
-		    i, RD4(sc, i));
+	for (int i = 0; i < nitems(reg_list); ++i)
+		device_printf(sc->dev, "[0x%08x] 0x%08x\n", i, RD4(sc, i));
 
 	ZSLCR_UNLOCK(sc);
 }
