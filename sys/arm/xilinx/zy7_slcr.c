@@ -988,7 +988,8 @@ zy7_dump_all_other_registers()
 		ZY7_SLCR_DDRIOB_DCI_STATUS
 	};
 	for (int i = 0; i < nitems(reg_list); ++i)
-		device_printf(sc->dev, "[0x%08x] 0x%08x\n", i, RD4(sc, i));
+		device_printf(sc->dev, "[0x%08x] 0x%08x\n", reg_list[i],
+				RD4(sc, reg_list[i]));
 
 	ZSLCR_UNLOCK(sc);
 }
