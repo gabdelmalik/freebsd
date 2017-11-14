@@ -192,8 +192,7 @@ SUBDIR=	alias \
 	xo \
 	xz \
 	xzdec \
-	yes \
-	zstd
+	yes
 
 # NB: keep these sorted by MK_* knobs
 
