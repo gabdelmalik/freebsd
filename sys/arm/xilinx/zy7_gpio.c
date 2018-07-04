@@ -68,6 +68,8 @@ __FBSDID("$FreeBSD$");
 
 #include "gpio_if.h"
 
+#include "zy7_gpio.h"
+
 #define NUMBANKS	4
 #define MAXPIN		(32*NUMBANKS)
 
@@ -92,6 +94,8 @@ struct zy7_gpio_softc {
 	struct mtx	sc_mtx;
 	struct resource *mem_res;	/* Memory resource */
 };
+
+static device_t dev_ptr = NULL;
 
 #define WR4(sc, off, val)	bus_write_4((sc)->mem_res, (off), (val))
 #define RD4(sc, off)		bus_read_4((sc)->mem_res, (off))
@@ -282,6 +286,21 @@ zy7_gpio_pin_toggle(device_t dev, uint32_t pin)
 	return (0);
 }
 
+int zy7_gpio_set_value(int pin, int val)
+{
+	return zy7_gpio_pin_set(dev_ptr, pin, val);
+}
+
+int zy7_gpio_get_value(int pin, int* val)
+{
+	return zy7_gpio_pin_get(dev_ptr, pin, val);
+}
+
+int zy7_gpio_toggle(int pin)
+{
+	return zy7_gpio_pin_toggle(dev_ptr, pin);
+}
+
 static int
 zy7_gpio_probe(device_t dev)
 {
@@ -322,7 +341,12 @@ zy7_gpio_attach(device_t dev)
 	struct zy7_gpio_softc *sc = device_get_softc(dev);
 	int rid;
 
+	/* Allow only one attach. */
+	if (dev_ptr != NULL)
+		return (ENXIO);
+
 	sc->dev = dev;
+	dev_ptr = dev;
 
 	ZGPIO_LOCK_INIT(sc);
 
