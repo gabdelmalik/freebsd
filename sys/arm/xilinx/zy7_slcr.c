@@ -571,6 +571,27 @@ cspi_clk_reset(int unit)
 	return (0);
 }
 
+int
+qspi_clk_reset(void)
+{
+	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
+
+	ZSLCR_LOCK(sc);
+	zy7_slcr_unlock(sc);
+
+	/* It is required that the reset flags be asserted, then after some
+	 * delay be deasserted.
+	 */
+	WR4(sc, ZY7_SLCR_LQSPI_RST_CTRL, ZY7_SLCR_LQSPI_REF_RST | ZY7_SLCR_LQSPI_CPU1X_RST);
+	DELAY(1000);
+	WR4(sc, ZY7_SLCR_LQSPI_RST_CTRL, 0);
+
+	zy7_slcr_lock(sc);
+	ZSLCR_UNLOCK(sc);
+
+	return (0);
+}
+
 static int
 get_cpu_clk_params(int *src_freq, int *divisor)
 {
@@ -641,6 +662,35 @@ cspi_get_ref_clk_source(enum zy7_clk_src *source)
 	return (0);
 }
 
+int
+qspi_get_ref_clk_source(enum zy7_clk_src *source)
+{
+	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
+	uint32_t reg;
+
+	if (!sc)
+		return (-1);
+
+	ZSLCR_LOCK(sc);
+	reg = RD4(sc, ZY7_SLCR_LQSPI_CLK_CTRL);
+	ZSLCR_UNLOCK(sc);
+
+	switch (reg & ZY7_SLCR_LQSPI_CLK_SRCSEL_MASK) {
+		case ZY7_SLCR_LQSPI_CLK_SRCSEL_IOPLL :
+			*source = zy7_clk_src_iopll;
+			break;
+		case ZY7_SLCR_LQSPI_CLK_SRCSEL_ARMPLL:
+			*source = zy7_clk_src_armpll;
+			break;
+		case ZY7_SLCR_LQSPI_CLK_SRCSEL_DDRPLL:
+			*source = zy7_clk_src_ddrpll;
+			break;
+		default:
+			return (-1);
+	}
+	return (0);
+}
+
 const char*
  zy7_clk_src_as_string(enum zy7_clk_src source)
 {
@@ -692,6 +742,43 @@ cspi_set_ref_clk_source(enum zy7_clk_src source)
 	reg |= ZY7_SLCR_SPI_CLK_ACT(1); /* activate both. */
 	zy7_slcr_unlock(sc);
 	WR4(sc, ZY7_SLCR_SPI_CLK_CTRL, reg);
+	zy7_slcr_lock(sc);
+	ZSLCR_UNLOCK(sc);
+
+	return (0);
+}
+
+int
+qspi_set_ref_clk_source(enum zy7_clk_src source)
+{
+	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
+	uint32_t reg;
+	uint32_t src_sel_flags;
+
+	if (!sc)
+		return (-1);
+
+	switch (source) {
+		case zy7_clk_src_iopll:
+			src_sel_flags = ZY7_SLCR_LQSPI_CLK_SRCSEL_IOPLL;
+			break;
+		case zy7_clk_src_armpll:
+			src_sel_flags = ZY7_SLCR_LQSPI_CLK_SRCSEL_ARMPLL;
+			break;
+		case zy7_clk_src_ddrpll:
+			src_sel_flags = ZY7_SLCR_LQSPI_CLK_SRCSEL_DDRPLL;
+			break;
+		default:
+			return (-1);
+	}
+
+	/* Apply the selected source */
+	ZSLCR_LOCK(sc);
+	reg = RD4(sc, ZY7_SLCR_LQSPI_CLK_CTRL);
+	reg &= ZY7_SLCR_LQSPI_CLK_SRCSEL_MASK;
+	reg |= src_sel_flags;
+	zy7_slcr_unlock(sc);
+	WR4(sc, ZY7_SLCR_LQSPI_CLK_CTRL, reg);
 	zy7_slcr_lock(sc);
 	ZSLCR_UNLOCK(sc);
 
@@ -771,6 +858,59 @@ cspi_set_ref_clk_freq(int desired_freq)
 }
 
 int
+qspi_set_ref_clk_freq(int desired_freq)
+{
+	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
+	uint32_t reg;
+	int divisor;  /* attempt to find which yields desired_freq */
+	int qspi_ref_freq; /* resultant freq after applying the divisor */
+	int cpu1x_freq;
+	int err;
+	enum zy7_clk_src src_clk;
+	int src_freq;
+
+	if (!sc)
+		return (-1);
+
+	err = qspi_get_ref_clk_source(&src_clk);
+	if (err) return err;
+	err = freq_of_source(src_clk, &src_freq);
+	if (err) return err;
+	err = cpu_freqs(&cpu1x_freq, NULL, NULL, NULL);
+	if (err) return err;
+
+	/* Find the divisor which yields a QSPI reference frequency
+	 * which is closest to, but not greater, than what is desired. */
+	divisor = ZY7_SLCR_LQSPI_CLK_DIVISOR_MIN;
+	while (divisor <= ZY7_SLCR_LQSPI_CLK_DIVISOR_MAX) {
+		qspi_ref_freq = src_freq / divisor;
+		if (qspi_ref_freq > desired_freq)
+			++divisor; /* freq still too large. keep reaching */
+		else
+			break; /* divisor found */
+	}
+	if (divisor > ZY7_SLCR_LQSPI_CLK_DIVISOR_MAX
+	    /* Clocking restrictions require that the SPI reference clock,
+	     * SPI_Ref_Clk, be greater than the CPU_1x clock frequency.
+	     */
+	    || qspi_ref_freq <= cpu1x_freq) {
+		return (-1);
+	}
+
+	/* Apply computed divisor value */
+	ZSLCR_LOCK(sc);
+	reg = RD4(sc, ZY7_SLCR_LQSPI_CLK_CTRL);
+	reg &= ~ZY7_SLCR_LQSPI_CLK_DIVISOR_MASK;
+	reg |= (divisor << ZY7_SLCR_LQSPI_CLK_DIVISOR_SHIFT);
+	zy7_slcr_unlock(sc);
+	WR4(sc, ZY7_SLCR_LQSPI_CLK_CTRL, reg);
+	zy7_slcr_lock(sc);
+	ZSLCR_UNLOCK(sc);
+
+	return (0);
+}
+
+int
 cspi_get_ref_clk_freq(int *freq)
 {
 	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
@@ -796,6 +936,36 @@ cspi_get_ref_clk_freq(int *freq)
 	    >> ZY7_SLCR_SPI_CLK_DIVISOR_SHIFT;
 	KASSERT(divisor >= ZY7_SLCR_SPI_CLK_DIVISOR_MIN,
 	    ("cspi_get_ref_clk_freq: divisor too small"));
+	*freq = src_freq / divisor;
+	return (0);
+}
+
+int
+qspi_get_ref_clk_freq(int *freq)
+{
+	struct zy7_slcr_softc *sc = zy7_slcr_softc_p;
+	uint32_t reg;
+	int err;
+	int divisor;
+	int src_freq;
+	enum zy7_clk_src src_clk;
+
+	if (!sc || !freq)
+		return (-1);
+
+	err = qspi_get_ref_clk_source(&src_clk);
+	if (err) return err;
+	err = freq_of_source(src_clk, &src_freq);
+	if (err) return err;
+
+	ZSLCR_LOCK(sc);
+	reg = RD4(sc, ZY7_SLCR_LQSPI_CLK_CTRL);
+	ZSLCR_UNLOCK(sc);
+
+	divisor = (reg & ZY7_SLCR_LQSPI_CLK_DIVISOR_MASK)
+	    >> ZY7_SLCR_LQSPI_CLK_DIVISOR_SHIFT;
+	KASSERT(divisor >= ZY7_SLCR_LQSPI_CLK_DIVISOR_MIN,
+	    ("qspi_get_ref_clk_freq: divisor too small"));
 	*freq = src_freq / divisor;
 	return (0);
 }

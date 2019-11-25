@@ -17,4 +17,5 @@ dev/sdhci/sdhci_fdt.c				optional sdhci
 arm/xilinx/zy7_ehci.c 				optional ehci
 arm/xilinx/uart_dev_cdnc.c			optional uart
 arm/xilinx/zy7_gpio.c				optional gpio
+arm/xilinx/qspi.c				optional qspi
 

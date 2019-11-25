@@ -139,6 +139,21 @@
 #define   ZY7_SLCR_GEM_CLK_CTRL_CLKACT			1
 #define ZY7_SLCR_SMC_CLK_CTRL		0x0148
 #define ZY7_SLCR_LQSPI_CLK_CTRL		0x014c
+#define   ZY7_SLCR_LQSPI_CLK_DIVISOR_SHIFT	8
+#define   ZY7_SLCR_LQSPI_CLK_DIVISOR_MASK		(0x3f << \
+						ZY7_SLCR_LQSPI_CLK_DIVISOR_SHIFT)
+#define   ZY7_SLCR_LQSPI_CLK_DIVISOR_MIN		1
+#define   ZY7_SLCR_LQSPI_CLK_DIVISOR_MAX		0x3f
+#define   ZY7_SLCR_LQSPI_CLK_SRCSEL_SHIFT		4
+#define   ZY7_SLCR_LQSPI_CLK_SRCSEL_MASK		(0x3 << \
+						ZY7_SLCR_LQSPI_CLK_SRCSEL_SHIFT)
+#define   ZY7_SLCR_LQSPI_CLK_SRCSEL_IOPLL		(0 << \
+						ZY7_SLCR_LQSPI_CLK_SRCSEL_SHIFT)
+#define   ZY7_SLCR_LQSPI_CLK_SRCSEL_ARMPLL	(2 << \
+						ZY7_SLCR_LQSPI_CLK_SRCSEL_SHIFT)
+#define   ZY7_SLCR_LQSPI_CLK_SRCSEL_DDRPLL	(3 << \
+						ZY7_SLCR_LQSPI_CLK_SRCSEL_SHIFT)
+#define   ZY7_SLCR_LQSPI_CLK_ACT		(1 << 0)
 #define ZY7_SLCR_SDIO_CLK_CTRL		0x0150
 #define ZY7_SLCR_UART_CLK_CTRL		0x0154
 #define ZY7_SLCR_SPI_CLK_CTRL		0x0158
@@ -198,6 +213,10 @@
 #define ZY7_SLCR_UART_RST_CTRL		0x0228
 #define ZY7_SLCR_GPIO_RST_CTRL		0x022c
 #define ZY7_SLCR_LQSPI_RST_CTRL		0x0230
+	  /* Reference clock reset */
+#define   ZY7_SLCR_LQSPI_REF_RST				(1 << 1)
+	  /* AMBA clock reset */
+#define   ZY7_SLCR_LQSPI_CPU1X_RST			(1 << 0)
 #define ZY7_SLCR_SMC_RST_CTRL		0x0234
 #define ZY7_SLCR_OCM_RST_CTRL		0x0238
 #define ZY7_SLCR_DEVCI_RST_CTRL		0x023c
@@ -344,15 +363,22 @@ bool     zy7_mio_set_pin_register(int pin, uint32_t reg);
 bool     zy7_mio_unmap_pin_range(int begin, int end); /* inclusive */
 void     zy7_dump_mio_pin_control_registers(void);
 
-int cspi_clk_reset(int unit);
 enum zy7_clk_src {
     zy7_clk_src_iopll, zy7_clk_src_armpll, zy7_clk_src_ddrpll
 };
 const char* zy7_clk_src_as_string(enum zy7_clk_src source);
+
+int cspi_clk_reset(int unit);
 int cspi_set_ref_clk_source(enum zy7_clk_src source);
 int cspi_set_ref_clk_freq(int freq);
 int cspi_get_ref_clk_source(enum zy7_clk_src *source);
 int cspi_get_ref_clk_freq(int *freq);
+
+int qspi_clk_reset(void);
+int qspi_get_ref_clk_source(enum zy7_clk_src *source);
+int qspi_set_ref_clk_source(enum zy7_clk_src source);
+int qspi_set_ref_clk_freq(int freq);
+int qspi_get_ref_clk_freq(int *freq);
 
 #endif
 #endif /* _ZY7_SLCR_H_ */

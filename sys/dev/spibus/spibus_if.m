@@ -39,3 +39,10 @@ METHOD int transfer {
 	device_t child;
 	struct spi_command *cmd;
 };
+
+METHOD int transfer2 {
+	device_t dev;
+	int cs;
+	struct spi_command *cmd;
+	bool cansleep;
+};
